@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
@@ -99,7 +99,9 @@ export function VoiceAssistant({
         setTranscript(transcript);
         console.log('Voice result:', transcript);
         
-        if (event.results[current].isFinal) {
+        // Only process final results and ensure minimum length
+        if (event.results[current].isFinal && transcript.trim().length > 3) {
+          console.log('Processing final transcript:', transcript);
           handleVoiceCommand(transcript);
         }
       };
@@ -183,7 +185,13 @@ export function VoiceAssistant({
     }
   };
 
-  const handleVoiceCommand = async (command: string) => {
+  const handleVoiceCommand = useCallback(async (command: string) => {
+    // Prevent duplicate processing
+    if (isProcessing) {
+      console.log('Already processing, skipping:', command);
+      return;
+    }
+    
     try {
       console.log('Processing voice command:', command, 'Step:', conversationStep);
       setIsProcessing(true);
@@ -208,7 +216,7 @@ export function VoiceAssistant({
           // Process meal planning results
           if (result.mealPlans && result.mealPlans.length > 0 && onMealPlanCreated) {
             console.log('Creating meal plans:', result.mealPlans);
-            onMealPlanCreated(result.mealPlans);
+            result.mealPlans.forEach((plan: any) => onMealPlanCreated(plan));
           }
           
           if (result.recipes && result.recipes.length > 0 && onRecipeCreated) {
@@ -257,69 +265,66 @@ export function VoiceAssistant({
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [isProcessing, conversationStep, context, onResult, onMealPlanCreated, onRecipeCreated, recipeContext, currentStep, speak, toast, startListening]);
 
-  const speak = (text: string) => {
+  const speak = useCallback((text: string) => {
     console.log('Speaking:', text);
     
-    if ('speechSynthesis' in window) {
+    // Check if browser supports speech synthesis
+    if (!('speechSynthesis' in window)) {
+      console.error('Speech synthesis not available in this browser');
+      setIsSpeaking(false);
+      return;
+    }
+    
+    try {
       // Cancel any existing speech
       speechSynthesis.cancel();
-      
       setIsSpeaking(true);
       
-      // Wait for voices to load
-      const speakWithVoice = () => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        
-        // Get available voices and prefer English ones
-        const voices = speechSynthesis.getVoices();
-        const englishVoice = voices.find(voice => 
-          voice.lang.startsWith('en') && !voice.name.includes('Google')
-        ) || voices[0];
-        
-        if (englishVoice) {
-          utterance.voice = englishVoice;
-        }
-        
-        // Configure voice settings
-        utterance.rate = 0.85;
-        utterance.pitch = 1.0;
-        utterance.volume = 0.9;
-        utterance.lang = 'en-US';
-        
-        utterance.onstart = () => {
-          console.log('Speech started');
-        };
-        
-        utterance.onend = () => {
-          console.log('Speech ended');
-          setIsSpeaking(false);
-        };
-        
-        utterance.onerror = (event) => {
-          console.error('Speech error:', event);
-          setIsSpeaking(false);
-        };
-        
-        console.log('Starting speech synthesis');
-        speechSynthesis.speak(utterance);
+      // Create utterance immediately
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      // Configure voice settings for better mobile compatibility
+      utterance.rate = 0.8;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      utterance.lang = 'en-US';
+      
+      // Event handlers
+      utterance.onstart = () => {
+        console.log('Speech synthesis started successfully');
       };
       
-      // Handle voice loading
-      if (speechSynthesis.getVoices().length === 0) {
-        speechSynthesis.onvoiceschanged = () => {
-          speakWithVoice();
-          speechSynthesis.onvoiceschanged = null;
-        };
-      } else {
-        speakWithVoice();
-      }
-    } else {
-      console.error('Speech synthesis not supported');
+      utterance.onend = () => {
+        console.log('Speech synthesis ended');
+        setIsSpeaking(false);
+      };
+      
+      utterance.onerror = (event) => {
+        console.error('Speech synthesis error:', event.error);
+        setIsSpeaking(false);
+      };
+      
+      // Start speaking immediately without waiting for voices
+      console.log('Starting speech synthesis...');
+      speechSynthesis.speak(utterance);
+      
+      // Add fallback timeout for mobile browsers
+      setTimeout(() => {
+        if (utterance && speechSynthesis.speaking) {
+          console.log('Speech still running, this is normal');
+        } else if (isSpeaking) {
+          console.log('Speech may have failed silently, stopping indicator');
+          setIsSpeaking(false);
+        }
+      }, text.length * 100 + 5000);
+      
+    } catch (error) {
+      console.error('Speech synthesis failed:', error);
       setIsSpeaking(false);
     }
-  };
+  }, [isSpeaking]);
 
   const stopSpeaking = () => {
     if ('speechSynthesis' in window) {

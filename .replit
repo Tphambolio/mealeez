@@ -36,8 +36,11 @@ args = "npm run dev"
 waitForPort = 5000
 
 [agent]
-integrations = ["javascript_database==1.0.0", "javascript_object_storage==1.0.0", "javascript_websocket==1.0.0", "javascript_log_in_with_replit==1.0.0", "javascript_openai==1.0.0"]
+integrations = ["javascript_openai==1.0.0", "javascript_database==1.0.0", "javascript_log_in_with_replit==1.0.0", "javascript_websocket==1.0.0", "javascript_object_storage==1.0.0"]
 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[objectStorage]
+defaultBucketID = "replit-objstore-95ae414a-28a1-48b5-a943-a44b76a52e9b"

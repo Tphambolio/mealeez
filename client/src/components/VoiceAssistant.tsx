@@ -166,9 +166,16 @@ export function VoiceAssistant({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       
-      const mediaRecorder = new MediaRecorder(stream, { 
-        mimeType: "audio/webm" 
-      });
+      // Try different mime types for better Android compatibility
+      let mimeType = "audio/webm";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/wav";
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = "audio/mp4";
+        }
+      }
+      
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
       
       const chunks: BlobPart[] = [];
@@ -180,12 +187,12 @@ export function VoiceAssistant({
       };
       
       mediaRecorder.onstop = async () => {
-        console.log('MediaRecorder stopped, processing audio...');
-        const blob = new Blob(chunks, { type: "audio/webm" });
+        console.log('MediaRecorder stopped, processing audio...', `Format: ${mimeType}`);
+        const blob = new Blob(chunks, { type: mimeType });
         
         try {
           const formData = new FormData();
-          formData.append("audio", blob, "speech.webm");
+          formData.append("audio", blob, `speech.${mimeType.split('/')[1]}`);
           
           const response = await fetch("/api/stt", {
             method: "POST",
@@ -199,6 +206,11 @@ export function VoiceAssistant({
             await handleVoiceCommand(result.text.trim());
           } else {
             console.error('STT error:', result);
+            toast({
+              title: "Voice Recognition Error",
+              description: "Could not process audio. Please try again.",
+              variant: "destructive",
+            });
           }
         } catch (error) {
           console.error('STT request failed:', error);
@@ -215,12 +227,12 @@ export function VoiceAssistant({
       mediaRecorder.start();
       setIsListening(true);
       
-      // Auto-stop after 5 seconds (can be made configurable)
+      // Auto-stop after 4 seconds for better UX
       setTimeout(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
           mediaRecorderRef.current.stop();
         }
-      }, 5000);
+      }, 4000);
       
     } catch (error) {
       console.error('Failed to start audio recording:', error);
@@ -276,8 +288,13 @@ export function VoiceAssistant({
       body: JSON.stringify(payload),
     });
     
-    if (!response.ok || !response.body) {
-      throw new Error(`HTTP ${response.status}: Failed to get streaming response`);
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+    
+    if (!response.body) {
+      throw new Error('No response body received');
     }
     
     const reader = response.body.getReader();
@@ -297,7 +314,14 @@ export function VoiceAssistant({
       reader.releaseLock();
     }
     
-    return extractLastJSONObject(fullText);
+    // Extract the last valid JSON object from the stream
+    for (let i = fullText.lastIndexOf("{"); i >= 0; i--) {
+      try {
+        return JSON.parse(fullText.slice(i).trim());
+      } catch {}
+    }
+    
+    throw new Error("No valid JSON found in stream response");
   }
 
   async function applyActions(actions: any[]) {

@@ -40,7 +40,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   await setupAuth(app);
 
   // Health check endpoint
-  app.get("/api/health", (_, res) => res.json({ok: true, ts: Date.now()}));
+  app.get("/api/health", (_, res) => {
+    res.json({
+      ok: true,
+      node: process.version,
+      hasKey: Boolean(process.env.OPENAI_API_KEY),
+      env: process.env.NODE_ENV || "unknown",
+      ts: Date.now()
+    });
+  });
 
   // STT fallback route for Android compatibility
   app.post("/api/stt", upload.single("audio"), async (req, res) => {
@@ -462,6 +470,11 @@ No code fences. Metric units. If still clarifying, return actions: [].
         ]
       };
 
+      // Set streaming headers before making request
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { 
@@ -472,28 +485,16 @@ No code fences. Metric units. If still clarifying, return actions: [].
       });
 
       if (!response.ok || !response.body) {
-        return res.status(500).end(`model_error:${response.status}`);
+        const errTxt = await response.text().catch(() => "");
+        console.error("OpenAI upstream error:", response.status, errTxt);
+        res.status(502).end(`upstream_error:${response.status}`);
+        return;
       }
 
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value, { stream: true });
-          res.write(chunk);
-        }
-      } finally {
-        reader.releaseLock();
+      // Stream the response directly
+      for await (const chunk of response.body as any) {
+        res.write(chunk);
       }
-      
       res.end();
     } catch (error) {
       console.error("Error generating meal suggestions:", error);

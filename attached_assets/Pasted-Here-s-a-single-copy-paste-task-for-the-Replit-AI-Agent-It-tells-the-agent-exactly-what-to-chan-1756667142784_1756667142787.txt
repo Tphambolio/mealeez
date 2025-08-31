@@ -1,0 +1,270 @@
+Here’s a single **copy-paste task** for the Replit AI Agent. It tells the agent exactly what to change/add (server + client), how to set Deploy env vars, and what tests to pass.
+
+---
+
+## REPLIT AI AGENT TASK — Fix Two-Way Voice + Streaming GPT + Deploy
+
+**Goal:**
+Make the voice assistant fully conversational in **deploy** and **preview**: health check, correct streaming relay to OpenAI, JSON action schema, Android STT fallback, and client-side stream parsing.
+
+### 0) Preconditions
+
+* Project type: React (client) + Node/Express (server).
+* Use OpenAI `chat.completions` streaming.
+
+---
+
+### 1) Server: add health + robust streaming route
+
+**Create/replace** `server/health.ts` (or add in main server file):
+
+```ts
+// Health + diagnostics
+app.get("/api/health", (_req, res) => {
+  res.json({
+    ok: true,
+    node: process.version,
+    hasKey: Boolean(process.env.OPENAI_API_KEY),
+    env: process.env.NODE_ENV || "unknown",
+    ts: Date.now()
+  });
+});
+```
+
+**Create/replace** the planning endpoint in `server/routes/voice.ts` (or wherever `/api/voice/plan-meal` lives). If the file doesn’t exist, create it and mount from server entry:
+
+```ts
+import fetch from "node-fetch";
+
+const SYS_PROMPT = `
+You are MealBuilder. Talk naturally to confirm preferences, then END EACH TURN with ONE JSON object only:
+{"reply":"...", "actions":[
+  {"type":"ADD_MEALS","data":[{"day":"Mon","slot":"dinner","recipe":"...","ingredients":[{"name":"...", "qty":..., "unit":"..."}]}]},
+  {"type":"UPDATE_GROCERIES","data":[{"name":"...", "qty":..., "unit":"...", "category":"..."}]},
+  {"type":"BUILD_CALENDAR","data":[{"date":"YYYY-MM-DD","slot":"breakfast|lunch|dinner","recipe":"..."}]}
+]}
+Rules: metric units; consistent units; if clarifying, return actions:[]. No code fences.
+`.trim();
+
+app.post("/api/voice/plan-meal", async (req, res) => {
+  try {
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.MODEL || "gpt-4o-mini",
+        temperature: 0.2,
+        stream: true,
+        messages: [
+          { role: "system", content: SYS_PROMPT },
+          { role: "user", content: JSON.stringify({
+              utterance: req.body.transcript,
+              state: req.body.clientState || {}
+          })}
+        ]
+      })
+    });
+
+    if (!r.ok || !r.body) {
+      const errTxt = await r.text().catch(() => "");
+      console.error("OpenAI upstream error:", r.status, errTxt);
+      res.status(502).end(`upstream_error:${r.status}`);
+      return;
+    }
+
+    for await (const chunk of r.body as any) res.write(chunk);
+    res.end();
+  } catch (e) {
+    console.error("plan-meal route error:", e);
+    res.status(500).end("route_crash");
+  }
+});
+```
+
+> If there is also `/api/voice/cooking-assistance`, apply the **same** streaming pattern.
+
+**Mount routes** in the server entry (if not already):
+
+```ts
+import "./routes/voice";   // ensure the route file is imported/executed
+import "./health";
+```
+
+---
+
+### 2) Deploy env vars (production separate from workspace)
+
+In **Deploy → Settings → Environment variables**, add:
+
+* `OPENAI_API_KEY = <REDACTED>`
+* (Optional) `MODEL = gpt-4o-mini`
+
+Redeploy. Then verify:
+
+* Visit `https://<your-app>.replit.app/api/health` → it must return JSON with `"hasKey": true`.
+
+---
+
+### 3) Client: stream reader + JSON tail extraction
+
+**Add utility** (or inline it) used by the voice component:
+
+```ts
+export async function sendStreaming(route: string, payload: any) {
+  const res = await fetch(route, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!res.body) throw new Error("no response body");
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let full = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    full += dec.decode(value, { stream: true });
+    // Optional: show typing animation here
+  }
+  // Extract the last valid JSON object (schema block) from the stream tail
+  for (let i = full.lastIndexOf("{"); i >= 0; i--) {
+    try { return JSON.parse(full.slice(i).trim()); } catch {}
+  }
+  throw new Error("no JSON found in stream");
+}
+```
+
+**Use it** inside the voice handler:
+
+```ts
+const json = await sendStreaming("/api/voice/plan-meal", {
+  transcript: userText,
+  clientState: getClientState?.() || {}
+});
+if (json?.reply) speak(json.reply);
+if (Array.isArray(json?.actions)) applyActions(json.actions);
+```
+
+---
+
+### 4) Android STT fallback (when `SpeechRecognition` is missing)
+
+Add a fallback in the voice component:
+
+```ts
+const hasSR = !!(window as any).webkitSpeechRecognition || !!(window as any).SpeechRecognition;
+
+async function startListening(){
+  setTranscript("");
+  if (hasSR) {
+    keepListeningRef.current = true;
+    recognitionRef.current!.start();
+    setIsListening(true);
+    return;
+  }
+  // Fallback: short-record with MediaRecorder (press-to-talk UX)
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  const chunks: BlobPart[] = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = async () => {
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    const form = new FormData(); form.append("audio", blob, "speech.webm");
+    const r = await fetch("/api/stt", { method: "POST", body: form });
+    const { text } = await r.json();
+    if (text?.trim()) await handleVoiceCommand(text.trim());
+    stream.getTracks().forEach(t => t.stop());
+  };
+  rec.start();
+  setIsListening(true);
+  setTimeout(() => { rec.stop(); setIsListening(false); }, 4000); // basic VAD window
+}
+```
+
+Add a simple STT route (if not present) using OpenAI Whisper:
+
+```ts
+import multer from "multer"; const upload = multer();
+app.post("/api/stt", upload.single("audio"), async (req, res) => {
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([req.file.buffer]), "audio.webm");
+    form.append("model", "gpt-4o-mini-transcribe"); // or "whisper-1"
+    const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form as any
+    });
+    const j = await r.json();
+    if (!r.ok) return res.status(500).json(j);
+    res.json({ text: j.text || "" });
+  } catch (e:any) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+```
+
+Add deps if missing:
+
+```json
+"dependencies": {
+  "express": "^4.19.2",
+  "cors": "^2.8.5",
+  "node-fetch": "^3.3.2",
+  "multer": "^1.4.5-lts.1"
+}
+```
+
+---
+
+### 5) Voice UX polish (avoid echo, keep listening)
+
+Inside the component:
+
+* Stop mic while speaking; auto-resume after TTS:
+
+```ts
+const wasListening = isListening;
+if (wasListening) stopListening();
+if (json?.reply) {
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(json.reply);
+  u.onend = () => { setIsSpeaking(false); if (wasListening) startListening(); };
+  setIsSpeaking(true); speechSynthesis.speak(u);
+}
+```
+
+* In `onend` of `SpeechRecognition`, **auto-restart** if `keepListeningRef.current` is true.
+
+---
+
+### 6) Tests the Agent must pass
+
+**Backend**
+
+* `GET /api/health` returns JSON with `"ok":true` and `"hasKey":true` in **Deploy**.
+* `POST /api/voice/plan-meal` streams data (Transfer-Encoding: chunked). No 500s.
+* If OpenAI fails, server responds `502 upstream_error:<status>` and logs upstream body.
+
+**Client**
+
+* `sendStreaming()` reads the stream and extracts a final JSON object with `{reply, actions}`.
+* Actions are passed to reducers (`ADD_MEALS`, `UPDATE_GROCERIES`, `BUILD_CALENDAR`).
+* Mic pauses during TTS and resumes afterward.
+* On Android without `SpeechRecognition`, fallback STT works via `/api/stt`.
+
+**Acceptance**
+
+* User can say: “Plan dinners for 3 people, no chicken, \$120 budget.”
+* Assistant responds via TTS, **updates meals**, **updates shopping list with quantities**, and **populates the calendar** for the week.
+
+---
+
+**Implement all changes above and redeploy.**

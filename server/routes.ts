@@ -337,10 +337,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/voice/plan-meal', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { transcript, preferences } = req.body;
+      const { transcript, conversationStep, preferences } = req.body;
       
-      const suggestions = await generateMealSuggestions(transcript, preferences);
-      res.json(suggestions);
+      const user = await storage.getUser(userId);
+      const userName = user?.firstName || 'there';
+      
+      // Handle guided conversation flow
+      let response = '';
+      let nextStep = conversationStep;
+      
+      if (conversationStep === 1) {
+        // Dietary preferences and serving size
+        response = `Thanks for sharing! I understand you're planning meals. Based on what you've told me, let me ask: what types of meals are you in the mood for this week? Any specific cuisines, comfort foods, or healthy options you'd like to focus on?`;
+        nextStep = 2;
+      } else if (conversationStep === 2) {
+        // Meal preferences
+        response = `Great choices! Now, to help me suggest the perfect recipes, are there any specific ingredients you want to use up, or any cooking methods you prefer? For example, quick 30-minute meals, slow cooker recipes, or something you can prep ahead?`;
+        nextStep = 3;
+      } else if (conversationStep === 3) {
+        // Recipe suggestions
+        const suggestions = await generateMealSuggestions(transcript, preferences);
+        response = `Perfect! Based on everything you've told me, I have some fantastic meal ideas for you. ${suggestions.response || 'Let me create a personalized meal plan that fits your preferences.'}`;
+        nextStep = 4;
+      } else {
+        // General conversation
+        const suggestions = await generateMealSuggestions(transcript, preferences);
+        response = suggestions.response || "I'm here to help with your meal planning. What would you like to know?";
+      }
+      
+      res.json({ 
+        response, 
+        nextStep: nextStep < 4 ? nextStep : undefined,
+        conversationStep 
+      });
     } catch (error) {
       console.error("Error generating meal suggestions:", error);
       res.status(500).json({ message: "Failed to generate meal suggestions" });

@@ -59,6 +59,8 @@ interface VoiceAssistantProps {
   context?: 'planning' | 'cooking';
   recipeContext?: any;
   currentStep?: any;
+  userName?: string;
+  autoStart?: boolean;
 }
 
 export function VoiceAssistant({ 
@@ -66,11 +68,15 @@ export function VoiceAssistant({
   onResult, 
   context = 'planning',
   recipeContext,
-  currentStep 
+  currentStep,
+  userName,
+  autoStart = false
 }: VoiceAssistantProps) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [conversationStep, setConversationStep] = useState(0);
+  const [hasStarted, setHasStarted] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const { toast } = useToast();
 
@@ -86,6 +92,7 @@ export function VoiceAssistant({
         const current = event.resultIndex;
         const transcript = event.results[current][0].transcript;
         setTranscript(transcript);
+        console.log('Voice result:', transcript);
         
         if (event.results[current].isFinal) {
           handleVoiceCommand(transcript);
@@ -107,12 +114,34 @@ export function VoiceAssistant({
       };
     }
 
+    // Auto-start welcome message if requested
+    if (autoStart && !hasStarted && userName) {
+      setTimeout(() => {
+        startConversation();
+      }, 1000);
+    }
+
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
     };
-  }, []);
+  }, [autoStart, hasStarted, userName]);
+
+  const startConversation = () => {
+    if (hasStarted) return;
+    setHasStarted(true);
+    setConversationStep(1);
+    
+    const welcomeMessage = `Hi ${userName || 'there'}! Welcome to MealBuilder. I'm here to help you plan your weekly meals. Let's get started! Tell me about your dietary preferences, any allergies, and how many people you're cooking for this week.`;
+    
+    speak(welcomeMessage);
+    
+    // Auto-start listening after welcome
+    setTimeout(() => {
+      startListening();
+    }, 8000);
+  };
 
   const startListening = () => {
     if (recognitionRef.current && !isListening) {
@@ -136,12 +165,21 @@ export function VoiceAssistant({
       if (context === 'planning') {
         const response = await apiRequest('POST', '/api/voice/plan-meal', {
           transcript: command,
+          conversationStep: conversationStep,
           preferences: {}
         });
         const result = await response.json();
         
         if (result.response) {
           speak(result.response);
+          
+          // Guide conversation flow
+          if (result.nextStep) {
+            setConversationStep(result.nextStep);
+            setTimeout(() => {
+              startListening();
+            }, 3000);
+          }
         }
       } else if (context === 'cooking') {
         const response = await apiRequest('POST', '/api/voice/cooking-assistance', {
@@ -192,7 +230,7 @@ export function VoiceAssistant({
               "rounded-full w-12 h-12",
               isListening && "animate-pulse"
             )}
-            onClick={isListening ? stopListening : startListening}
+            onClick={isListening ? stopListening : (hasStarted ? startListening : startConversation)}
             data-testid="button-voice-toggle"
           >
             {isListening ? <MicOff /> : <Mic />}
@@ -200,7 +238,7 @@ export function VoiceAssistant({
           
           <div className="flex-1">
             <p className="text-sm font-medium">
-              {isListening ? "Listening..." : "Tap to speak"}
+              {isListening ? "Listening..." : hasStarted ? "Tap to speak" : "Start planning"}
             </p>
             {transcript && (
               <p className="text-xs text-muted-foreground mt-1" data-testid="text-transcript">
@@ -224,6 +262,17 @@ export function VoiceAssistant({
         {context === 'cooking' && (
           <div className="mt-3 text-xs text-muted-foreground">
             <p>Try saying: "What's next?", "Repeat that", "Set timer for 5 minutes"</p>
+          </div>
+        )}
+        
+        {context === 'planning' && conversationStep > 0 && (
+          <div className="mt-3 text-xs text-muted-foreground">
+            <p>
+              {conversationStep === 1 && "Tell me about dietary preferences and serving size..."}
+              {conversationStep === 2 && "What meals would you like this week?"}
+              {conversationStep === 3 && "Any specific recipes or cuisines in mind?"}
+              {conversationStep > 3 && "I'm here to help with your meal planning!"}
+            </p>
           </div>
         )}
       </CardContent>

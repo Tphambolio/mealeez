@@ -161,6 +161,8 @@ export default function Home() {
                 <CardContent>
                   <VoiceAssistant
                     context="planning"
+                    userName={user?.firstName}
+                    autoStart={true}
                     onResult={(result) => {
                       console.log('Voice result:', result);
                     }}

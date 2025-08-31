@@ -81,6 +81,7 @@ export function VoiceAssistant({
   const [transcript, setTranscript] = useState('');
   const [conversationStep, setConversationStep] = useState(0);
   const [hasStarted, setHasStarted] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const { toast } = useToast();
 
@@ -120,9 +121,20 @@ export function VoiceAssistant({
 
     // Auto-start welcome message if requested
     if (autoStart && !hasStarted && userName) {
-      setTimeout(() => {
-        startConversation();
-      }, 1000);
+      console.log('Auto-starting conversation for:', userName);
+      const timer = setTimeout(() => {
+        if (!hasStarted) {
+          console.log('Triggering welcome conversation');
+          startConversation();
+        }
+      }, 2000);
+      
+      return () => {
+        clearTimeout(timer);
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+      };
     }
 
     return () => {
@@ -133,18 +145,22 @@ export function VoiceAssistant({
   }, [autoStart, hasStarted, userName]);
 
   const startConversation = () => {
+    console.log('Starting conversation, hasStarted:', hasStarted);
     if (hasStarted) return;
+    
     setHasStarted(true);
     setConversationStep(1);
     
     const welcomeMessage = `Hi ${userName || 'there'}! Welcome to MealBuilder. I'm here to help you plan your weekly meals. Let's get started! Tell me about your dietary preferences, any allergies, and how many people you're cooking for this week.`;
     
+    console.log('Welcome message:', welcomeMessage);
     speak(welcomeMessage);
     
     // Auto-start listening after welcome
     setTimeout(() => {
+      console.log('Auto-starting listening after welcome');
       startListening();
-    }, 8000);
+    }, 10000);
   };
 
   const startListening = () => {
@@ -169,35 +185,54 @@ export function VoiceAssistant({
 
   const handleVoiceCommand = async (command: string) => {
     try {
+      console.log('Processing voice command:', command, 'Step:', conversationStep);
+      setIsProcessing(true);
       onResult?.(command);
       
       if (context === 'planning') {
+        console.log('Sending to backend:', { transcript: command, conversationStep, preferences: {} });
+        
         const response = await apiRequest('POST', '/api/voice/plan-meal', {
           transcript: command,
           conversationStep: conversationStep,
           preferences: {}
         });
+        
         const result = await response.json();
+        console.log('Backend response:', result);
         
         if (result.response) {
+          console.log('Speaking response:', result.response);
           speak(result.response);
           
           // Process meal planning results
-          if (result.mealPlans && onMealPlanCreated) {
+          if (result.mealPlans && result.mealPlans.length > 0 && onMealPlanCreated) {
+            console.log('Creating meal plans:', result.mealPlans);
             onMealPlanCreated(result.mealPlans);
           }
           
-          if (result.recipes && onRecipeCreated) {
+          if (result.recipes && result.recipes.length > 0 && onRecipeCreated) {
+            console.log('Creating recipes:', result.recipes);
             result.recipes.forEach((recipe: any) => onRecipeCreated(recipe));
           }
           
           // Guide conversation flow
           if (result.nextStep) {
+            console.log('Moving to next step:', result.nextStep);
             setConversationStep(result.nextStep);
+            
+            // Calculate speech duration and add buffer time
+            const speechDuration = result.response.length * 100; // Rough estimate
+            const delayTime = Math.max(speechDuration, 4000);
+            
             setTimeout(() => {
+              console.log('Auto-continuing conversation');
               startListening();
-            }, 3000);
+            }, delayTime);
           }
+        } else {
+          console.warn('No response from backend');
+          speak('Sorry, I didn\'t understand that. Could you try again?');
         }
       } else if (context === 'cooking') {
         const response = await apiRequest('POST', '/api/voice/cooking-assistance', {
@@ -213,39 +248,76 @@ export function VoiceAssistant({
       }
     } catch (error) {
       console.error('Error processing voice command:', error);
+      speak('Sorry, I encountered an error. Please try again.');
       toast({
         title: "Voice Command Error",
         description: "Failed to process voice command.",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const speak = (text: string) => {
+    console.log('Speaking:', text);
+    
     if ('speechSynthesis' in window) {
       // Cancel any existing speech
       speechSynthesis.cancel();
       
       setIsSpeaking(true);
-      const utterance = new SpeechSynthesisUtterance(text);
       
-      // Configure voice settings
-      utterance.rate = 0.9;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      
-      utterance.onend = () => {
-        setIsSpeaking(false);
-      };
-      
-      utterance.onerror = () => {
-        setIsSpeaking(false);
-      };
-      
-      // Small delay to ensure previous speech is cancelled
-      setTimeout(() => {
+      // Wait for voices to load
+      const speakWithVoice = () => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Get available voices and prefer English ones
+        const voices = speechSynthesis.getVoices();
+        const englishVoice = voices.find(voice => 
+          voice.lang.startsWith('en') && !voice.name.includes('Google')
+        ) || voices[0];
+        
+        if (englishVoice) {
+          utterance.voice = englishVoice;
+        }
+        
+        // Configure voice settings
+        utterance.rate = 0.85;
+        utterance.pitch = 1.0;
+        utterance.volume = 0.9;
+        utterance.lang = 'en-US';
+        
+        utterance.onstart = () => {
+          console.log('Speech started');
+        };
+        
+        utterance.onend = () => {
+          console.log('Speech ended');
+          setIsSpeaking(false);
+        };
+        
+        utterance.onerror = (event) => {
+          console.error('Speech error:', event);
+          setIsSpeaking(false);
+        };
+        
+        console.log('Starting speech synthesis');
         speechSynthesis.speak(utterance);
-      }, 100);
+      };
+      
+      // Handle voice loading
+      if (speechSynthesis.getVoices().length === 0) {
+        speechSynthesis.onvoiceschanged = () => {
+          speakWithVoice();
+          speechSynthesis.onvoiceschanged = null;
+        };
+      } else {
+        speakWithVoice();
+      }
+    } else {
+      console.error('Speech synthesis not supported');
+      setIsSpeaking(false);
     }
   };
 
@@ -261,21 +333,29 @@ export function VoiceAssistant({
       <CardContent className="p-4">
         <div className="flex items-center space-x-4">
           <Button
-            variant={isListening ? "destructive" : "default"}
+            variant={isListening ? "destructive" : isProcessing ? "secondary" : "default"}
             size="lg"
             className={cn(
               "rounded-full w-12 h-12",
-              isListening && "animate-pulse"
+              isListening && "animate-pulse",
+              isProcessing && "animate-bounce"
             )}
             onClick={isListening ? stopListening : (hasStarted ? startListening : startConversation)}
+            disabled={isProcessing}
             data-testid="button-voice-toggle"
           >
-            {isListening ? <MicOff /> : <Mic />}
+            {isProcessing ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+            ) : isListening ? (
+              <MicOff />
+            ) : (
+              <Mic />
+            )}
           </Button>
           
           <div className="flex-1">
             <p className="text-sm font-medium">
-              {isListening ? "Listening..." : hasStarted ? "Tap to speak" : "Start planning"}
+              {isProcessing ? "AI is thinking..." : isListening ? "Listening..." : hasStarted ? "Tap to speak" : "Start planning"}
             </p>
             {transcript && (
               <p className="text-xs text-muted-foreground mt-1" data-testid="text-transcript">

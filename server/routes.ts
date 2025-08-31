@@ -339,12 +339,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user.claims.sub;
       const { transcript, conversationStep, preferences } = req.body;
       
+      console.log('Voice planning request:', { transcript, conversationStep, userId });
+      
       const user = await storage.getUser(userId);
       const userName = user?.firstName || 'there';
       
       // Handle guided conversation flow
       let response = '';
       let nextStep = conversationStep;
+      let mealPlans = [];
+      let recipes = [];
       
       if (conversationStep === 1) {
         // Dietary preferences and serving size
@@ -355,24 +359,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
         response = `Great choices! Now, to help me suggest the perfect recipes, are there any specific ingredients you want to use up, or any cooking methods you prefer? For example, quick 30-minute meals, slow cooker recipes, or something you can prep ahead?`;
         nextStep = 3;
       } else if (conversationStep === 3) {
-        // Recipe suggestions
+        // Recipe suggestions - Actually generate meal plans and recipes
+        console.log('Generating meal suggestions for:', transcript);
         const suggestions = await generateMealSuggestions(transcript, preferences);
-        response = `Perfect! Based on everything you've told me, I have some fantastic meal ideas for you. ${suggestions.response || 'Let me create a personalized meal plan that fits your preferences.'}`;
+        console.log('Generated suggestions:', suggestions);
+        
+        response = `Perfect! Based on everything you've told me, I've created a personalized meal plan for you. ${suggestions.response || "I've added several meal options to your weekly schedule and created new recipes for your library!"}`;
+        
+        // Extract meal plans and recipes from suggestions
+        if (suggestions.mealPlans) {
+          mealPlans = suggestions.mealPlans;
+        }
+        if (suggestions.recipes) {
+          recipes = suggestions.recipes;
+        }
+        
         nextStep = 4;
       } else {
-        // General conversation
+        // General conversation - still try to generate content
+        console.log('General conversation, generating suggestions for:', transcript);
         const suggestions = await generateMealSuggestions(transcript, preferences);
+        console.log('General suggestions:', suggestions);
+        
         response = suggestions.response || "I'm here to help with your meal planning. What would you like to know?";
+        
+        // Still extract content if available
+        if (suggestions.mealPlans) {
+          mealPlans = suggestions.mealPlans;
+        }
+        if (suggestions.recipes) {
+          recipes = suggestions.recipes;
+        }
       }
+      
+      console.log('Sending response:', { response, mealPlans, recipes, nextStep });
       
       res.json({ 
         response, 
         nextStep: nextStep < 4 ? nextStep : undefined,
-        conversationStep 
+        conversationStep,
+        mealPlans,
+        recipes
       });
     } catch (error) {
       console.error("Error generating meal suggestions:", error);
-      res.status(500).json({ message: "Failed to generate meal suggestions" });
+      res.status(500).json({ message: "Failed to generate meal suggestions", response: "Sorry, I encountered an error. Please try again." });
     }
   });
 

@@ -1,0 +1,452 @@
+Here’s a single copy-paste instruction block you can give Replit AI to fix the assistant so it has a natural two-way voice loop, streams GPT, and returns structured actions to populate meals, groceries w/ quantities, and the calendar.
+
+
+---
+
+REPLIT AI TASK — FIX VOICE ASSISTANT FOR TWO-WAY CONVERSATION, STREAMING GPT, AND ACTION SCHEMA
+
+Goal
+Make the voice assistant truly conversational: (1) auto-restart listening, (2) avoid TTS feedback loops, (3) stream LLM output, and (4) return a strict JSON action block so the UI can update Meals, Groceries, and Calendar deterministically.
+
+1) Server: add streaming endpoints with strict schema
+
+Create/replace server.ts (or server.js) with:
+
+import express from "express";
+import cors from "cors";
+import fetch from "node-fetch";
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+
+const MODEL = "gpt-4o-mini"; // or any available chat model
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const SYS_PROMPT = `
+You are MealBuilder, a proactive meal-planning assistant.
+
+Objectives:
+- Have a short, natural dialogue to confirm constraints (allergies, servings, cuisines, budget).
+- Then propose a weekly plan and emit a single JSON action block to let the app update state.
+
+Return format (STRICT single JSON object, nothing else):
+{
+  "reply": "<what you say to the user in natural language>",
+  "actions": [
+    {"type":"ADD_MEALS","data":[
+      {"day":"Mon","slot":"dinner","recipe":"Turkey Chili",
+        "ingredients":[{"name":"ground turkey","qty":900,"unit":"g"},{"name":"black beans","qty":2,"unit":"cans"}]
+      }
+    ]},
+    {"type":"UPDATE_GROCERIES","data":[
+      {"name":"ground turkey","qty":900,"unit":"g","category":"Meat"},
+      {"name":"black beans","qty":2,"unit":"cans","category":"Canned"}
+    ]},
+    {"type":"BUILD_CALENDAR","data":[
+      {"date":"2025-08-25","slot":"dinner","recipe":"Turkey Chili"}
+    ]}
+  ]
+}
+
+Rules:
+- Use metric units where possible; keep units consistent across meals so quantities can be summed.
+- If the user is still deciding, set actions to [] and use reply to ask the next question.
+- Never include code fences or commentary around the JSON. Return only one top-level JSON object.
+`.trim();
+
+async function streamCompletion(userPayload: any, res: express.Response) {
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  const body = {
+    model: MODEL,
+    stream: true,
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: SYS_PROMPT },
+      { role: "user", content: JSON.stringify(userPayload) },
+    ],
+  };
+
+  const r = await fetch(OPENAI_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!r.ok || !r.body) {
+    res.status(500).end(`model_error:${r.status}`);
+    return;
+  }
+
+  // Relay raw text chunks; client will extract the final JSON object.
+  for await (const chunk of r.body as any) {
+    res.write(chunk);
+  }
+  res.end();
+}
+
+app.post("/api/voice/plan-meal", async (req, res) => {
+  const { transcript, clientState } = req.body || {};
+  await streamCompletion(
+    {
+      mode: "planning",
+      utterance: transcript,
+      state: clientState || {},
+    },
+    res
+  );
+});
+
+app.post("/api/voice/cooking-assistance", async (req, res) => {
+  const { question, recipeContext, currentStep } = req.body || {};
+  await streamCompletion(
+    {
+      mode: "cooking",
+      utterance: question,
+      recipeContext,
+      currentStep,
+    },
+    res
+  );
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
+
+Add env var in Replit Secrets: OPENAI_API_KEY = <your key>.
+
+package.json changes
+Add/ensure:
+
+{
+  "scripts": {
+    "dev": "vite",
+    "server": "ts-node server.ts",
+    "start": "concurrently \"vite\" \"ts-node server.ts\""
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^3.3.2",
+    "concurrently": "^8.2.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  }
+}
+
+2) Client: replace VoiceAssistant with auto-restart, no echo, streaming consumer
+
+Replace the component with this implementation (TypeScript/React):
+
+import { useState, useRef, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Mic, MicOff, VolumeX } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+    speechSynthesis: SpeechSynthesis;
+  }
+}
+
+interface VoiceAssistantProps {
+  className?: string;
+  onResult?: (result: string) => void;
+  context?: "planning" | "cooking";
+  recipeContext?: any;
+  currentStep?: any;
+  getClientState?: () => any; // pass current meals/groceries/calendar if available
+}
+
+export function VoiceAssistant({
+  className,
+  onResult,
+  context = "planning",
+  recipeContext,
+  currentStep,
+  getClientState = () => ({}),
+}: VoiceAssistantProps) {
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const recognitionRef = useRef<any>(null);
+  const keepListeningRef = useRef(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
+    if (!SR) {
+      console.warn("SpeechRecognition not supported in this browser.");
+      return;
+    }
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    recognitionRef.current = rec;
+
+    rec.onresult = (event: any) => {
+      let interim = "";
+      let finalText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        const txt = r[0].transcript;
+        if (r.isFinal) finalText += txt;
+        else interim += txt;
+      }
+      if (interim) setTranscript(interim.trim());
+      if (finalText) {
+        setTranscript("");
+        handleVoiceCommand(finalText.trim());
+      }
+    };
+
+    rec.onerror = (e: any) => {
+      console.error("STT error:", e.error);
+      setIsListening(false);
+      keepListeningRef.current = false;
+      toast({ title: "Voice error", description: e.error, variant: "destructive" });
+    };
+
+    rec.onend = () => {
+      setIsListening(false);
+      if (keepListeningRef.current) {
+        setTimeout(() => {
+          try {
+            rec.start();
+            setIsListening(true);
+          } catch {}
+        }, 250);
+      }
+    };
+
+    return () => rec.stop();
+  }, []);
+
+  const startListening = () => {
+    if (!recognitionRef.current || isListening) return;
+    keepListeningRef.current = true;
+    recognitionRef.current.start();
+    setIsListening(true);
+  };
+
+  const stopListening = () => {
+    keepListeningRef.current = false;
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
+  };
+
+  function extractLastJSONObject(text: string): any | null {
+    const lastBrace = text.lastIndexOf("{");
+    if (lastBrace < 0) return null;
+    for (let i = lastBrace; i >= 0; i--) {
+      const slice = text.slice(i).trim();
+      try {
+        return JSON.parse(slice);
+      } catch {}
+    }
+    return null;
+  }
+
+  async function sendStreaming(route: string, payload: any) {
+    const res = await fetch(route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.body) throw new Error("No response body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      full += decoder.decode(value, { stream: true });
+      // (optional) show typing effect from partial text here
+    }
+    return extractLastJSONObject(full);
+  }
+
+  function applyActions(actions: any[]) {
+    if (!Array.isArray(actions)) return;
+    // TODO: wire to real stores/reducers in your app.
+    actions.forEach(a => console.log("APPLY ACTION:", a.type, a.data));
+  }
+
+  const handleVoiceCommand = async (text: string) => {
+    try {
+      onResult?.(text);
+
+      // prevent speaker→mic feedback
+      const wasListening = isListening;
+      if (wasListening) stopListening();
+
+      const route =
+        context === "planning" ? "/api/voice/plan-meal" : "/api/voice/cooking-assistance";
+
+      const json = await sendStreaming(route, {
+        transcript: context === "planning" ? text : undefined,
+        question: context === "cooking" ? text : undefined,
+        recipeContext,
+        currentStep,
+        clientState: getClientState(),
+      });
+
+      if (json?.reply) speak(json.reply);
+      if (Array.isArray(json?.actions)) applyActions(json.actions);
+
+      if (wasListening) startListening();
+    } catch (e: any) {
+      console.error("Voice command failed", e);
+      toast({ title: "Voice Command Error", description: String(e), variant: "destructive" });
+    }
+  };
+
+  const speak = (text: string) => {
+    if (!("speechSynthesis" in window)) return;
+    setIsSpeaking(true);
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.onend = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(u);
+  };
+
+  const stopSpeaking = () => {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
+  return (
+    <Card className={cn("w-full max-w-md", className)}>
+      <CardContent className="p-4">
+        <div className="flex items-center space-x-4">
+          <Button
+            variant={isListening ? "destructive" : "default"}
+            size="lg"
+            className={cn("rounded-full w-12 h-12", isListening && "animate-pulse")}
+            onClick={isListening ? stopListening : startListening}
+          >
+            {isListening ? <MicOff /> : <Mic />}
+          </Button>
+
+          <div className="flex-1">
+            <p className="text-sm font-medium">{isListening ? "Listening..." : "Tap to speak"}</p>
+            {transcript && (
+              <p className="text-xs text-muted-foreground mt-1">{transcript}</p>
+            )}
+          </div>
+
+          {isSpeaking && (
+            <Button variant="outline" size="sm" onClick={stopSpeaking}>
+              <VolumeX className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
+
+        {context === "cooking" && (
+          <div className="mt-3 text-xs text-muted-foreground">
+            Try: “What’s next?”, “Repeat that”, “Set timer for 5 minutes”
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+3) Wire routes (proxy) so frontend hits same origin
+
+If using Vite, add vite.config.ts:
+
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      "/api": "http://localhost:3000"
+    }
+  }
+});
+
+4) Basic reducer stubs (so actions don’t crash)
+
+Create src/state/actions.ts (or integrate with your stores):
+
+export function applyMealBuilderActions(actions: any[]) {
+  actions?.forEach(a => {
+    switch (a.type) {
+      case "ADD_MEALS":
+        console.table(a.data);
+        break;
+      case "UPDATE_GROCERIES":
+        console.table(a.data);
+        break;
+      case "BUILD_CALENDAR":
+        console.table(a.data);
+        break;
+      default:
+        console.warn("Unknown action:", a.type);
+    }
+  });
+}
+
+(If you already have stores, replace the console.table calls with your real reducers.)
+
+5) Quick validation
+
+Run
+
+Ensure OPENAI_API_KEY is set.
+
+npm run start (or the Replit Run button wired to that script).
+
+
+DevTools checks
+
+Network → /api/voice/plan-meal shows streaming (chunks arriving).
+
+Console logs print APPLY ACTION lines with structured data.
+
+Mic resumes automatically after TTS completes.
+
+
+CLI smoke test
+
+curl -N -X POST http://localhost:3000/api/voice/plan-meal \
+  -H 'Content-Type: application/json' \
+  -d '{"transcript":"Plan dinners for 3 people, no chicken, budget $120.","clientState":{"weekStart":"2025-08-25"}}'
+
+Expect streamed text, ending with a single JSON object containing reply and actions.
+
+
+---
+
+Acceptance criteria
+
+Voice input keeps listening across turns (auto-restart).
+
+TTS never overlaps itself; mic pauses while speaking.
+
+GPT responses stream and conclude with a single JSON object.
+
+UI receives actions and can update Meals, Groceries (with quantities), and Calendar.
+
+
+End of task.
+

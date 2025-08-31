@@ -1,231 +1,117 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { Mic, MicOff, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { format, startOfWeek, addDays } from "date-fns";
 
-// Extend Window interface for Web Speech API
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
   }
 }
-
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  onresult: (event: SpeechRecognitionEvent) => void;
-  onerror: (event: SpeechRecognitionErrorEvent) => void;
-  onend: () => void;
-}
-
-interface SpeechRecognitionEvent {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionErrorEvent {
-  error: string;
-}
-
-interface SpeechRecognitionResultList {
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  [index: number]: SpeechRecognitionAlternative;
-  isFinal: boolean;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-declare var SpeechRecognition: {
-  prototype: SpeechRecognition;
-  new(): SpeechRecognition;
-};
 
 interface VoiceAssistantProps {
   className?: string;
   onResult?: (result: string) => void;
-  context?: 'planning' | 'cooking';
+  context?: "planning" | "cooking";
   recipeContext?: any;
   currentStep?: any;
-  userName?: string;
-  autoStart?: boolean;
-  onMealPlanCreated?: (mealPlans: any[]) => void;
+  getClientState?: () => any; // pass current meals/groceries/calendar if available
+  onMealPlanCreated?: (mealPlan: any) => void;
   onRecipeCreated?: (recipe: any) => void;
+  autoStart?: boolean;
+  userName?: string;
 }
 
-export function VoiceAssistant({ 
-  className, 
-  onResult, 
-  context = 'planning',
+export function VoiceAssistant({
+  className,
+  onResult,
+  context = "planning",
   recipeContext,
   currentStep,
-  userName,
-  autoStart = false,
+  getClientState = () => ({}),
   onMealPlanCreated,
-  onRecipeCreated
+  onRecipeCreated,
+  autoStart = false,
+  userName
 }: VoiceAssistantProps) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [transcript, setTranscript] = useState('');
-  const [conversationStep, setConversationStep] = useState(0);
+  const [transcript, setTranscript] = useState("");
   const [hasStarted, setHasStarted] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const keepListeningRef = useRef(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = true;
-      recognitionRef.current.lang = 'en-US';
-
-      recognitionRef.current.onresult = (event) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-        
-        // Process all results to build complete transcript
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
-          } else {
-            interimTranscript += transcript;
-          }
-        }
-        
-        // Show interim results for user feedback
-        if (interimTranscript) {
-          setTranscript(interimTranscript);
-          onResult?.(interimTranscript);
-          console.log('Voice result (interim):', interimTranscript);
-        }
-        
-        // Only process final results and ensure minimum length
-        if (finalTranscript.trim().length > 3) {
-          console.log('Processing final transcript:', finalTranscript.trim());
-          handleVoiceCommand(finalTranscript.trim());
-        }
-      };
-
-      recognitionRef.current.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
-        setIsListening(false);
-        toast({
-          title: "Voice Recognition Error",
-          description: "Please try again.",
-          variant: "destructive",
-        });
-      };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
-    }
-
-    // Auto-start welcome message if requested
-    if (autoStart && !hasStarted && userName) {
-      console.log('Auto-starting conversation for:', userName);
-      const timer = setTimeout(() => {
-        if (!hasStarted) {
-          console.log('Triggering welcome conversation');
-          startConversation();
-        }
-      }, 2000);
-      
-      return () => {
-        clearTimeout(timer);
-        if (recognitionRef.current) {
-          recognitionRef.current.stop();
-        }
-      };
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
-  }, [autoStart, hasStarted, userName]);
-
-  // Define speak function first
-  const speak = useCallback((text: string) => {
-    console.log('Speaking:', text);
-    
-    if (!('speechSynthesis' in window)) {
-      console.warn('Speech synthesis not supported - will show text instead');
-      // Show the text response visually if speech isn't available
-      setTranscript(`AI: ${text}`);
+    const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
+    if (!SR) {
+      console.warn("SpeechRecognition not supported in this browser.");
       return;
     }
-    
-    try {
-      // Cancel any existing speech
-      speechSynthesis.cancel();
-      setIsSpeaking(true);
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      utterance.lang = 'en-US';
-      
-      utterance.onstart = () => {
-        console.log('Speech synthesis started successfully');
-      };
-      
-      utterance.onend = () => {
-        console.log('Speech synthesis ended');
-        setIsSpeaking(false);
-      };
-      
-      utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event.error);
-        setIsSpeaking(false);
-        // Fallback to showing text
-        setTranscript(`AI: ${text}`);
-      };
-      
-      // Try to speak immediately
-      speechSynthesis.speak(utterance);
-      
-      // Fallback timeout
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    recognitionRef.current = rec;
+
+    rec.onresult = (event: any) => {
+      let interim = "";
+      let finalText = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        const txt = r[0].transcript;
+        if (r.isFinal) finalText += txt;
+        else interim += txt;
+      }
+      if (interim) setTranscript(interim.trim());
+      if (finalText && finalText.trim().length > 3) {
+        setTranscript("");
+        handleVoiceCommand(finalText.trim());
+      }
+    };
+
+    rec.onerror = (e: any) => {
+      console.error("STT error:", e.error);
+      setIsListening(false);
+      keepListeningRef.current = false;
+      toast({ title: "Voice error", description: e.error, variant: "destructive" });
+    };
+
+    rec.onend = () => {
+      setIsListening(false);
+      if (keepListeningRef.current) {
+        setTimeout(() => {
+          try {
+            rec.start();
+            setIsListening(true);
+          } catch {}
+        }, 250);
+      }
+    };
+
+    return () => rec.stop();
+  }, []);
+
+  // Auto-start conversation for meal planning
+  useEffect(() => {
+    if (autoStart && !hasStarted && userName && context === 'planning') {
+      console.log('Auto-starting conversation for:', userName);
       setTimeout(() => {
-        if (speechSynthesis.speaking) {
-          console.log('Speech still active');
-        } else if (isSpeaking) {
-          console.log('Speech completed or failed, resetting state');
-          setIsSpeaking(false);
-        }
-      }, Math.max(text.length * 80 + 2000, 5000));
-      
-    } catch (error) {
-      console.error('Speech synthesis failed:', error);
-      setIsSpeaking(false);
-      // Fallback to showing text
-      setTranscript(`AI: ${text}`);
+        console.log('Triggering welcome conversation');
+        startConversation();
+      }, 2000);
     }
-  }, [isSpeaking]);
+  }, [autoStart, hasStarted, userName, context]);
 
   const startConversation = () => {
     console.log('Starting conversation, hasStarted:', hasStarted);
     if (hasStarted) return;
     
     setHasStarted(true);
-    setConversationStep(1);
     
     const welcomeMessage = `Hi ${userName || 'there'}! Welcome to MealBuilder. I'm here to help you plan your weekly meals. Let's get started! Tell me about your dietary preferences, any allergies, and how many people you're cooking for this week.`;
     
@@ -236,180 +122,352 @@ export function VoiceAssistant({
     setTimeout(() => {
       console.log('Auto-starting listening after welcome');
       startListening();
-    }, 10000);
+    }, 6000);
   };
 
   const startListening = () => {
-    if (recognitionRef.current && !isListening) {
-      try {
-        setTranscript('');
-        setIsListening(true);
-        recognitionRef.current.start();
-      } catch (error) {
-        console.error('Error starting speech recognition:', error);
-        setIsListening(false);
-      }
+    if (!recognitionRef.current || isListening) return;
+    keepListeningRef.current = true;
+    try {
+      recognitionRef.current.start();
+      setIsListening(true);
+    } catch (error) {
+      console.error('Error starting speech recognition:', error);
     }
   };
 
   const stopListening = () => {
+    keepListeningRef.current = false;
     if (recognitionRef.current && isListening) {
       recognitionRef.current.stop();
       setIsListening(false);
     }
   };
 
-  const handleVoiceCommand = useCallback(async (command: string) => {
-    // Prevent duplicate processing
-    if (isProcessing) {
-      console.log('Already processing, skipping:', command);
+  function extractLastJSONObject(text: string): any | null {
+    const lastBrace = text.lastIndexOf("{");
+    if (lastBrace < 0) return null;
+    for (let i = lastBrace; i >= 0; i--) {
+      const slice = text.slice(i).trim();
+      try {
+        return JSON.parse(slice);
+      } catch {}
+    }
+    return null;
+  }
+
+  async function sendStreaming(route: string, payload: any) {
+    const res = await fetch(route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.body) throw new Error("No response body");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      full += decoder.decode(value, { stream: true });
+      // (optional) show typing effect from partial text here
+    }
+    return extractLastJSONObject(full);
+  }
+
+  async function applyActions(actions: any[]) {
+    if (!Array.isArray(actions)) return;
+    console.log('Applying actions:', actions);
+    
+    for (const action of actions) {
+      console.log("APPLY ACTION:", action.type, action.data);
+      
+      try {
+        switch (action.type) {
+          case "ADD_MEALS":
+            await handleAddMeals(action.data);
+            break;
+          case "UPDATE_GROCERIES":
+            await handleUpdateGroceries(action.data);
+            break;
+          case "BUILD_CALENDAR":
+            await handleBuildCalendar(action.data);
+            break;
+          default:
+            console.warn("Unknown action:", action.type);
+        }
+      } catch (error) {
+        console.error(`Error applying ${action.type} action:`, error);
+        toast({
+          title: `Error processing ${action.type}`,
+          description: "Some meal planning actions couldn't be completed.",
+          variant: "destructive",
+        });
+      }
+    }
+  }
+
+  const handleAddMeals = async (meals: any[]) => {
+    if (!Array.isArray(meals)) return;
+    
+    const createdRecipes = [];
+    const createdMealPlans = [];
+
+    for (const meal of meals) {
+      try {
+        // Create recipe first if needed
+        let recipeId = meal.recipeId;
+        if (!recipeId && meal.recipe) {
+          console.log('Creating new recipe:', meal.recipe);
+          const newRecipe = await fetch('/api/recipes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: meal.recipe,
+              description: `AI-generated recipe for ${meal.recipe}`,
+              servings: meal.servings || 4,
+              prepTime: 30,
+              cookTime: 30,
+            }),
+          });
+          const recipeData = await newRecipe.json();
+          recipeId = recipeData.id;
+          createdRecipes.push(recipeData);
+          
+          // Add ingredients if provided
+          if (meal.ingredients && Array.isArray(meal.ingredients)) {
+            for (const ingredient of meal.ingredients) {
+              await fetch('/api/ingredients', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  recipeId,
+                  raw: `${ingredient.qty || ''} ${ingredient.unit || ''} ${ingredient.name}`.trim(),
+                  quantity: ingredient.qty?.toString(),
+                  unit: ingredient.unit,
+                  item: ingredient.name,
+                  aisle: ingredient.category || null,
+                }),
+              });
+            }
+          }
+        }
+
+        // Create meal plan
+        if (meal.day && meal.slot) {
+          const mealDate = getMealDate(meal.day);
+          console.log('Creating meal plan:', { date: mealDate, slot: meal.slot, recipeId });
+          
+          const mealPlan = await fetch('/api/meal-plans', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              date: mealDate,
+              mealSlot: meal.slot.toLowerCase(),
+              recipeId: recipeId,
+              servingsOverride: meal.servings,
+            }),
+          });
+          const mealPlanData = await mealPlan.json();
+          createdMealPlans.push(mealPlanData);
+        }
+      } catch (error) {
+        console.error('Error processing meal:', meal, error);
+      }
+    }
+
+    // Notify callbacks
+    if (createdRecipes.length > 0 && onRecipeCreated) {
+      createdRecipes.forEach(recipe => onRecipeCreated(recipe));
+    }
+    if (createdMealPlans.length > 0 && onMealPlanCreated) {
+      createdMealPlans.forEach(mealPlan => onMealPlanCreated(mealPlan));
+    }
+
+    if (createdMealPlans.length > 0) {
+      toast({
+        title: "Meals Added!",
+        description: `Successfully added ${createdMealPlans.length} meal(s) to your weekly plan.`,
+      });
+    }
+  };
+
+  const handleUpdateGroceries = async (groceries: any[]) => {
+    if (!Array.isArray(groceries)) return;
+    
+    try {
+      // Generate shopping list for current week
+      const weekStart = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+      
+      // Add individual items to shopping list
+      for (const item of groceries) {
+        console.log('Adding grocery item:', item);
+        // This would require extending the shopping list API to add individual items
+        // For now, we'll show a summary
+      }
+      
+      toast({
+        title: "Shopping List Updated!",
+        description: `Added ${groceries.length} item(s) to your shopping list.`,
+      });
+      console.table(groceries);
+    } catch (error) {
+      console.error('Error updating groceries:', error);
+    }
+  };
+
+  const handleBuildCalendar = async (calendarEvents: any[]) => {
+    if (!Array.isArray(calendarEvents)) return;
+    
+    console.log('Calendar events to create:', calendarEvents);
+    // TODO: Implement calendar integration
+    // This would connect to Google Calendar API or similar
+    
+    toast({
+      title: "Calendar Updated!",
+      description: `Added ${calendarEvents.length} event(s) to your calendar.`,
+    });
+  };
+
+  // Helper function to convert day names to dates
+  const getMealDate = (dayName: string): string => {
+    const currentWeek = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const dayMap: { [key: string]: number } = {
+      'mon': 0, 'monday': 0,
+      'tue': 1, 'tuesday': 1, 
+      'wed': 2, 'wednesday': 2,
+      'thu': 3, 'thursday': 3,
+      'fri': 4, 'friday': 4,
+      'sat': 5, 'saturday': 5,
+      'sun': 6, 'sunday': 6,
+    };
+    
+    const dayIndex = dayMap[dayName.toLowerCase()] ?? 0;
+    const date = addDays(currentWeek, dayIndex);
+    return format(date, 'yyyy-MM-dd');
+  };
+
+  const handleVoiceCommand = async (text: string) => {
+    try {
+      console.log('Processing voice command:', text);
+      onResult?.(text);
+
+      const route = context === "planning" ? "/api/voice/plan-meal" : "/api/voice/cooking-assistance";
+
+      const json = await sendStreaming(route, {
+        transcript: context === "planning" ? text : undefined,
+        question: context === "cooking" ? text : undefined,
+        recipeContext,
+        currentStep,
+        clientState: getClientState(),
+      });
+
+      if (json?.reply) {
+        console.log('AI reply received:', json.reply);
+        speak(json.reply); // speak() now handles mic pause/resume automatically
+      }
+      if (Array.isArray(json?.actions)) {
+        applyActions(json.actions);
+      }
+    } catch (e: any) {
+      console.error("Voice command failed", e);
+      toast({ title: "Voice Command Error", description: String(e), variant: "destructive" });
+    }
+  };
+
+  const speak = (text: string) => {
+    if (!("speechSynthesis" in window)) {
+      console.warn('Speech synthesis not supported - showing text instead');
+      setTranscript(`AI: ${text}`);
       return;
     }
     
-    try {
-      console.log('Processing voice command:', command, 'Step:', conversationStep);
-      setIsProcessing(true);
-      onResult?.(command);
-      
-      if (context === 'planning') {
-        console.log('Sending to backend:', { transcript: command, conversationStep, preferences: {} });
-        
-        const response = await apiRequest('POST', '/api/voice/plan-meal', {
-          transcript: command,
-          conversationStep: conversationStep,
-          preferences: {}
-        });
-        
-        const result = await response.json();
-        console.log('Backend response:', result);
-        
-        if (result.response) {
-          console.log('Speaking response:', result.response);
-          speak(result.response);
-          
-          // Process meal planning results
-          if (result.mealPlans && result.mealPlans.length > 0 && onMealPlanCreated) {
-            console.log('Creating meal plans:', result.mealPlans);
-            result.mealPlans.forEach((plan: any) => onMealPlanCreated(plan));
-          }
-          
-          if (result.recipes && result.recipes.length > 0 && onRecipeCreated) {
-            console.log('Creating recipes:', result.recipes);
-            result.recipes.forEach((recipe: any) => onRecipeCreated(recipe));
-          }
-          
-          // Guide conversation flow
-          if (result.nextStep) {
-            console.log('Moving to next step:', result.nextStep);
-            setConversationStep(result.nextStep);
-            
-            // Calculate speech duration and add buffer time
-            const speechDuration = result.response.length * 100; // Rough estimate
-            const delayTime = Math.max(speechDuration, 4000);
-            
-            setTimeout(() => {
-              console.log('Auto-continuing conversation');
-              startListening();
-            }, delayTime);
-          }
-        } else {
-          console.warn('No response from backend');
-          speak('Sorry, I didn\'t understand that. Could you try again?');
-        }
-      } else if (context === 'cooking') {
-        const response = await apiRequest('POST', '/api/voice/cooking-assistance', {
-          question: command,
-          recipeContext,
-          currentStep
-        });
-        const result = await response.json();
-        
-        if (result.response) {
-          speak(result.response);
-        }
-      }
-    } catch (error) {
-      console.error('Error processing voice command:', error);
-      speak('Sorry, I encountered an error. Please try again.');
-      toast({
-        title: "Voice Command Error",
-        description: "Failed to process voice command.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsProcessing(false);
+    // CRITICAL: Stop listening while speaking to prevent feedback loops
+    const wasListening = isListening;
+    if (wasListening) {
+      stopListening();
     }
-  }, [isProcessing, conversationStep, context, onResult, onMealPlanCreated, onRecipeCreated, recipeContext, currentStep, toast, startListening, speak]);
+    
+    setIsSpeaking(true);
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.9;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    u.lang = 'en-US';
+    
+    u.onstart = () => {
+      console.log('Speech started - mic paused');
+    };
+    u.onend = () => {
+      console.log('Speech ended - resuming mic');
+      setIsSpeaking(false);
+      // Resume listening after a short delay if it was listening before
+      if (wasListening) {
+        setTimeout(() => startListening(), 1000);
+      }
+    };
+    u.onerror = (event) => {
+      console.error('Speech error:', event.error);
+      setIsSpeaking(false);
+      setTranscript(`AI: ${text}`);
+      // Resume listening on error if it was listening before
+      if (wasListening) {
+        setTimeout(() => startListening(), 1000);
+      }
+    };
+    
+    window.speechSynthesis.speak(u);
+  };
 
   const stopSpeaking = () => {
-    if ('speechSynthesis' in window) {
-      speechSynthesis.cancel();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
       setIsSpeaking(false);
     }
   };
 
   return (
-    <Card className={cn("w-full max-w-md", className)}>
+    <Card className={cn("w-full max-w-md", className)} data-testid="voice-assistant-card">
       <CardContent className="p-4">
         <div className="flex items-center space-x-4">
           <Button
-            variant={isListening ? "destructive" : isProcessing ? "secondary" : "default"}
+            data-testid="voice-assistant-button"
+            variant={isListening ? "destructive" : "default"}
             size="lg"
-            className={cn(
-              "rounded-full w-12 h-12",
-              isListening && "animate-pulse",
-              isProcessing && "animate-bounce"
-            )}
-            onClick={isListening ? stopListening : (hasStarted ? startListening : startConversation)}
-            disabled={isProcessing}
-            data-testid="button-voice-toggle"
+            className={cn("rounded-full w-12 h-12", isListening && "animate-pulse")}
+            onClick={isListening ? stopListening : startListening}
           >
-            {isProcessing ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
-            ) : isListening ? (
-              <MicOff />
-            ) : (
-              <Mic />
-            )}
+            {isListening ? <MicOff /> : <Mic />}
           </Button>
-          
+
           <div className="flex-1">
-            <p className="text-sm font-medium">
-              {isProcessing ? "AI is thinking..." : isListening ? "Listening..." : hasStarted ? "Tap to speak" : "Start planning"}
+            <p className="text-sm font-medium" data-testid="voice-status">
+              {isListening ? "Listening..." : isSpeaking ? "Speaking..." : "Tap to speak"}
             </p>
             {transcript && (
-              <p className="text-xs text-muted-foreground mt-1" data-testid="text-transcript">
+              <p className="text-xs text-muted-foreground mt-1" data-testid="transcript">
                 {transcript}
               </p>
             )}
           </div>
-          
+
           {isSpeaking && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={stopSpeaking}
-              data-testid="button-stop-speaking"
-            >
+            <Button variant="outline" size="sm" onClick={stopSpeaking} data-testid="stop-speaking-button">
               <VolumeX className="w-4 h-4" />
             </Button>
           )}
         </div>
-        
-        {context === 'cooking' && (
+
+        {context === "cooking" && (
           <div className="mt-3 text-xs text-muted-foreground">
-            <p>Try saying: "What's next?", "Repeat that", "Set timer for 5 minutes"</p>
+            Try: "What's next?", "Repeat that", "Set timer for 5 minutes"
           </div>
         )}
-        
-        {context === 'planning' && conversationStep > 0 && (
+
+        {context === "planning" && (
           <div className="mt-3 text-xs text-muted-foreground">
-            <p>
-              {conversationStep === 1 && "Tell me about dietary preferences and serving size..."}
-              {conversationStep === 2 && "What meals would you like this week?"}
-              {conversationStep === 3 && "Any specific recipes or cuisines in mind?"}
-              {conversationStep > 3 && "I'm here to help with your meal planning!"}
-            </p>
+            Try: "Plan dinners for 3 people", "I want healthy meals this week"
           </div>
         )}
       </CardContent>

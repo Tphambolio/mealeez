@@ -23,8 +23,14 @@ import {
   parseRecipeFromText,
   provideCookingAssistance
 } from "./openai";
+import OpenAI from "openai";
 import * as cheerio from "cheerio";
 import Tesseract from "tesseract.js";
+
+// the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+const openai = new OpenAI({ 
+  apiKey: process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR || "default_key" 
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -387,73 +393,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/voice/plan-meal', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const { transcript, conversationStep, preferences } = req.body;
+      const { transcript, clientState = {} } = req.body;
       
-      console.log('Voice planning request:', { transcript, conversationStep, userId });
+      console.log('Voice planning request (streaming):', { transcript, userId, clientState });
       
       const user = await storage.getUser(userId);
       const userName = user?.firstName || 'there';
-      
-      // Handle guided conversation flow
-      let response = '';
-      let nextStep = conversationStep;
-      let mealPlans = [];
-      let recipes = [];
-      
-      if (conversationStep === 1) {
-        // Dietary preferences and serving size
-        response = `Thanks for sharing! I understand you're planning meals. Based on what you've told me, let me ask: what types of meals are you in the mood for this week? Any specific cuisines, comfort foods, or healthy options you'd like to focus on?`;
-        nextStep = 2;
-      } else if (conversationStep === 2) {
-        // Meal preferences
-        response = `Great choices! Now, to help me suggest the perfect recipes, are there any specific ingredients you want to use up, or any cooking methods you prefer? For example, quick 30-minute meals, slow cooker recipes, or something you can prep ahead?`;
-        nextStep = 3;
-      } else if (conversationStep === 3) {
-        // Recipe suggestions - Actually generate meal plans and recipes
-        console.log('Generating meal suggestions for:', transcript);
-        const suggestions = await generateMealSuggestions(transcript, preferences);
-        console.log('Generated suggestions:', suggestions);
-        
-        response = `Perfect! Based on everything you've told me, I've created a personalized meal plan for you. ${suggestions.response || "I've added several meal options to your weekly schedule and created new recipes for your library!"}`;
-        
-        // Extract meal plans and recipes from suggestions
-        if (suggestions.mealPlans) {
-          mealPlans = suggestions.mealPlans;
-        }
-        if (suggestions.recipes) {
-          recipes = suggestions.recipes;
-        }
-        
-        nextStep = 4;
-      } else {
-        // General conversation - still try to generate content
-        console.log('General conversation, generating suggestions for:', transcript);
-        const suggestions = await generateMealSuggestions(transcript, preferences);
-        console.log('General suggestions:', suggestions);
-        
-        response = suggestions.response || "I'm here to help with your meal planning. What would you like to know?";
-        
-        // Still extract content if available
-        if (suggestions.mealPlans) {
-          mealPlans = suggestions.mealPlans;
-        }
-        if (suggestions.recipes) {
-          recipes = suggestions.recipes;
+
+      // Set up streaming response headers
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const systemPrompt = `
+You are MealBuilder, a proactive meal-planning assistant for ${userName}.
+
+Objectives:
+- Have a short, natural dialogue to confirm constraints (allergies, servings, cuisines, budget).
+- Then propose a weekly plan and emit a single JSON action block to let the app update state.
+
+Return format (STRICT single JSON object, nothing else):
+{
+  "reply": "<what you say to the user in natural language>",
+  "actions": [
+    {"type":"ADD_MEALS","data":[
+      {"day":"Mon","slot":"dinner","recipe":"Turkey Chili",
+        "ingredients":[{"name":"ground turkey","qty":900,"unit":"g"},{"name":"black beans","qty":2,"unit":"cans"}]
+      }
+    ]},
+    {"type":"UPDATE_GROCERIES","data":[
+      {"name":"ground turkey","qty":900,"unit":"g","category":"Meat"},
+      {"name":"black beans","qty":2,"unit":"cans","category":"Canned"}
+    ]},
+    {"type":"BUILD_CALENDAR","data":[
+      {"date":"2025-08-31","slot":"dinner","recipe":"Turkey Chili"}
+    ]}
+  ]
+}
+
+Rules:
+- Use metric units where possible; keep units consistent across meals so quantities can be summed.
+- If the user is still deciding, set actions to [] and use reply to ask the next question.
+- Never include code fences or commentary around the JSON. Return only one top-level JSON object.
+- Keep responses conversational and helpful.
+`.trim();
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        stream: true,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: JSON.stringify({
+            mode: "planning",
+            utterance: transcript,
+            state: clientState,
+            userName: userName
+          })},
+        ],
+      });
+
+      // Stream the response
+      for await (const chunk of response) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          res.write(content);
         }
       }
       
-      console.log('Sending response:', { response, mealPlans, recipes, nextStep });
-      
-      res.json({ 
-        response, 
-        nextStep: nextStep < 4 ? nextStep : undefined,
-        conversationStep,
-        mealPlans,
-        recipes
-      });
+      res.end();
     } catch (error) {
       console.error("Error generating meal suggestions:", error);
-      res.status(500).json({ message: "Failed to generate meal suggestions", response: "Sorry, I encountered an error. Please try again." });
+      res.status(500).end(`error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   });
 

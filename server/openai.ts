@@ -108,22 +108,76 @@ export async function analyzeRecipeFromImage(imageUrl: string): Promise<RecipeDa
 
 export async function generateMealSuggestions(transcript: string, preferences?: any): Promise<any> {
   try {
+    const currentDate = new Date();
+    const weekStart = new Date(currentDate);
+    weekStart.setDate(currentDate.getDate() - currentDate.getDay()); // Start of current week (Sunday)
+    
     const response = await openai.chat.completions.create({
       model: "gpt-5",
       messages: [
         {
           role: "system",
-          content: "You are a meal planning assistant. Based on the user's voice input and preferences, suggest appropriate meals and create meal plans. Return JSON with suggested recipes and meal plan recommendations."
+          content: `You are a meal planning assistant. Based on the user's voice input and preferences, create specific meal plans and recipes for this week. 
+
+IMPORTANT: Return JSON with this exact structure:
+{
+  "response": "Your conversational response to the user",
+  "mealPlans": [
+    {
+      "date": "YYYY-MM-DD",
+      "mealType": "breakfast|lunch|dinner|snack",
+      "recipeName": "Recipe Name",
+      "servings": 4,
+      "notes": "Any specific notes"
+    }
+  ],
+  "recipes": [
+    {
+      "title": "Recipe Name",
+      "description": "Brief description",
+      "servings": 4,
+      "prepMinutes": 15,
+      "cookMinutes": 30,
+      "ingredients": [
+        {
+          "raw": "2 cups flour",
+          "quantity": "2",
+          "unit": "cups",
+          "item": "flour",
+          "aisle": "baking"
+        }
+      ],
+      "steps": ["Step 1", "Step 2"]
+    }
+  ]
+}
+
+Current week starts on ${weekStart.toISOString().split('T')[0]}. Create meal plans for the next 7 days.`
         },
         {
           role: "user",
-          content: `User said: "${transcript}"\nUser preferences: ${JSON.stringify(preferences || {})}\n\nProvide meal suggestions and planning advice.`
+          content: `User said: "${transcript}"\nUser preferences: ${JSON.stringify(preferences || {})}\n\nCreate specific meal plans and recipes for this week based on what I mentioned.`
         }
       ],
       response_format: { type: "json_object" },
     });
     
-    return JSON.parse(response.choices[0].message.content || '{}');
+    const result = JSON.parse(response.choices[0].message.content || '{}');
+    
+    // Ensure proper date formatting for meal plans
+    if (result.mealPlans) {
+      result.mealPlans = result.mealPlans.map((plan: any, index: number) => {
+        const planDate = new Date(weekStart);
+        planDate.setDate(weekStart.getDate() + Math.floor(index / 3)); // Distribute across week
+        
+        return {
+          ...plan,
+          date: planDate.toISOString().split('T')[0]
+        };
+      });
+    }
+    
+    return result;
   } catch (error) {
     console.error('Error generating meal suggestions:', error);
     throw new Error('Failed to generate meal suggestions');

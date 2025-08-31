@@ -61,6 +61,8 @@ interface VoiceAssistantProps {
   currentStep?: any;
   userName?: string;
   autoStart?: boolean;
+  onMealPlanCreated?: (mealPlans: any[]) => void;
+  onRecipeCreated?: (recipe: any) => void;
 }
 
 export function VoiceAssistant({ 
@@ -70,7 +72,9 @@ export function VoiceAssistant({
   recipeContext,
   currentStep,
   userName,
-  autoStart = false
+  autoStart = false,
+  onMealPlanCreated,
+  onRecipeCreated
 }: VoiceAssistantProps) {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -145,9 +149,14 @@ export function VoiceAssistant({
 
   const startListening = () => {
     if (recognitionRef.current && !isListening) {
-      setTranscript('');
-      setIsListening(true);
-      recognitionRef.current.start();
+      try {
+        setTranscript('');
+        setIsListening(true);
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error('Error starting speech recognition:', error);
+        setIsListening(false);
+      }
     }
   };
 
@@ -172,6 +181,15 @@ export function VoiceAssistant({
         
         if (result.response) {
           speak(result.response);
+          
+          // Process meal planning results
+          if (result.mealPlans && onMealPlanCreated) {
+            onMealPlanCreated(result.mealPlans);
+          }
+          
+          if (result.recipes && onRecipeCreated) {
+            result.recipes.forEach((recipe: any) => onRecipeCreated(recipe));
+          }
           
           // Guide conversation flow
           if (result.nextStep) {
@@ -205,10 +223,29 @@ export function VoiceAssistant({
 
   const speak = (text: string) => {
     if ('speechSynthesis' in window) {
+      // Cancel any existing speech
+      speechSynthesis.cancel();
+      
       setIsSpeaking(true);
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.onend = () => setIsSpeaking(false);
-      speechSynthesis.speak(utterance);
+      
+      // Configure voice settings
+      utterance.rate = 0.9;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      utterance.onend = () => {
+        setIsSpeaking(false);
+      };
+      
+      utterance.onerror = () => {
+        setIsSpeaking(false);
+      };
+      
+      // Small delay to ensure previous speech is cancelled
+      setTimeout(() => {
+        speechSynthesis.speak(utterance);
+      }, 100);
     }
   };
 

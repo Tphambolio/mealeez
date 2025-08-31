@@ -8,7 +8,9 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Utensils, Settings, LogOut, Mic } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Recipe } from "@shared/schema";
 
 export default function Home() {
@@ -16,6 +18,8 @@ export default function Home() {
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [showVoiceAssistant, setShowVoiceAssistant] = useState(false);
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: preferences } = useQuery({
     queryKey: ['/api/settings'],
@@ -28,6 +32,50 @@ export default function Home() {
 
   const handleLogout = () => {
     window.location.href = '/api/logout';
+  };
+
+  const handleVoiceMealPlanCreated = async (mealPlans: any[]) => {
+    try {
+      for (const mealPlan of mealPlans) {
+        await apiRequest('POST', '/api/meal-plans', mealPlan);
+      }
+      
+      // Refresh meal plans to show new additions
+      queryClient.invalidateQueries({ queryKey: ['/api/meal-plans'] });
+      
+      toast({
+        title: "Meal plans created!",
+        description: `Added ${mealPlans.length} meal plan(s) to your weekly schedule.`,
+      });
+    } catch (error) {
+      console.error('Error creating meal plans:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create meal plans. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleVoiceRecipeCreated = async (recipe: any) => {
+    try {
+      await apiRequest('POST', '/api/recipes', recipe);
+      
+      // Refresh recipes to show new addition
+      queryClient.invalidateQueries({ queryKey: ['/api/recipes'] });
+      
+      toast({
+        title: "Recipe created!",
+        description: `Added "${recipe.title}" to your recipe library.`,
+      });
+    } catch (error) {
+      console.error('Error creating recipe:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create recipe. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   if (showCookingMode && selectedRecipe) {
@@ -161,11 +209,13 @@ export default function Home() {
                 <CardContent>
                   <VoiceAssistant
                     context="planning"
-                    userName={user?.firstName}
+                    userName={user?.firstName || undefined}
                     autoStart={true}
                     onResult={(result) => {
                       console.log('Voice result:', result);
                     }}
+                    onMealPlanCreated={handleVoiceMealPlanCreated}
+                    onRecipeCreated={handleVoiceRecipeCreated}
                   />
                 </CardContent>
               </Card>

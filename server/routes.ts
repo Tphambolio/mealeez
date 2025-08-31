@@ -146,17 +146,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "URL is required" });
       }
 
+      console.log(`Starting recipe import from URL: ${url}`);
       const recipeData = await analyzeRecipeFromUrl(url);
-      const recipe = await storage.createRecipe({ ...recipeData, userId });
+      console.log(`Extracted recipe data:`, recipeData);
+      
+      // Create the recipe with enhanced data
+      const recipe = await storage.createRecipe({ 
+        ...recipeData, 
+        userId,
+        // Preserve image URL if available from recipe data
+        imageUrl: recipeData.imageUrl || null
+      });
+      
+      console.log(`Created recipe with ID: ${recipe.id}`);
       
       // Create ingredients and steps
       if (recipeData.ingredients) {
+        console.log(`Creating ${recipeData.ingredients.length} ingredients`);
         for (const ingredient of recipeData.ingredients) {
           await storage.createIngredient({ ...ingredient, recipeId: recipe.id });
         }
       }
       
       if (recipeData.steps) {
+        console.log(`Creating ${recipeData.steps.length} steps`);
         for (let i = 0; i < recipeData.steps.length; i++) {
           await storage.createStep({
             recipeId: recipe.id,
@@ -166,10 +179,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      res.json(recipe);
+      console.log(`Successfully imported recipe: ${recipe.title}`);
+      
+      // Enhanced response with acknowledgment
+      res.json({ 
+        ...recipe,
+        success: true,
+        message: `Successfully imported "${recipe.title}" with ${recipeData.ingredients?.length || 0} ingredients and ${recipeData.steps?.length || 0} steps.`,
+        importedFrom: url,
+        hasImage: !!recipe.imageUrl
+      });
     } catch (error) {
       console.error("Error importing recipe from URL:", error);
-      res.status(500).json({ message: "Failed to import recipe from URL" });
+      res.status(500).json({ 
+        success: false,
+        message: "Failed to import recipe from URL", 
+        error: error.message 
+      });
     }
   });
 
@@ -182,17 +208,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Image URL is required" });
       }
 
+      console.log(`Starting recipe import from image: ${imageUrl}`);
       const recipeData = await analyzeRecipeFromImage(imageUrl);
-      const recipe = await storage.createRecipe({ ...recipeData, userId, imageUrl });
+      console.log(`Extracted recipe data from image:`, recipeData);
+      
+      const recipe = await storage.createRecipe({ 
+        ...recipeData, 
+        userId, 
+        imageUrl 
+      });
+      
+      console.log(`Created recipe from image with ID: ${recipe.id}`);
       
       // Create ingredients and steps
       if (recipeData.ingredients) {
+        console.log(`Creating ${recipeData.ingredients.length} ingredients from image`);
         for (const ingredient of recipeData.ingredients) {
           await storage.createIngredient({ ...ingredient, recipeId: recipe.id });
         }
       }
       
       if (recipeData.steps) {
+        console.log(`Creating ${recipeData.steps.length} steps from image`);
         for (let i = 0; i < recipeData.steps.length; i++) {
           await storage.createStep({
             recipeId: recipe.id,
@@ -202,10 +239,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      res.json(recipe);
+      console.log(`Successfully imported recipe from image: ${recipe.title}`);
+      
+      // Enhanced response with acknowledgment
+      res.json({ 
+        ...recipe,
+        success: true,
+        message: `Successfully imported "${recipe.title}" from image with ${recipeData.ingredients?.length || 0} ingredients and ${recipeData.steps?.length || 0} steps.`,
+        importedFrom: 'photo',
+        hasImage: true
+      });
     } catch (error) {
       console.error("Error importing recipe from photo:", error);
-      res.status(500).json({ message: "Failed to import recipe from photo" });
+      res.status(500).json({ 
+        success: false,
+        message: "Failed to import recipe from photo", 
+        error: error.message 
+      });
     }
   });
 

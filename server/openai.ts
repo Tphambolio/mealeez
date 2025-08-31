@@ -12,6 +12,7 @@ interface RecipeData {
   servings?: number;
   prepMinutes?: number;
   cookMinutes?: number;
+  imageUrl?: string;
   ingredients?: Array<{
     raw: string;
     quantity?: string;
@@ -30,6 +31,27 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
     const html = await response.text();
     const $ = cheerio.load(html);
     
+    // Extract potential recipe image
+    let imageUrl = null;
+    
+    // Look for recipe images in various places
+    const possibleImages = [
+      $('meta[property="og:image"]').attr('content'),
+      $('meta[name="twitter:image"]').attr('content'),
+      $('.recipe-image img, .hero-image img, [class*="recipe"] img').first().attr('src'),
+      $('img[alt*="recipe" i], img[alt*="dish" i]').first().attr('src'),
+      $('picture img, figure img').first().attr('src')
+    ].filter(Boolean);
+    
+    if (possibleImages.length > 0) {
+      imageUrl = possibleImages[0];
+      // Convert relative URLs to absolute
+      if (imageUrl && !imageUrl.startsWith('http')) {
+        const baseUrl = new URL(url);
+        imageUrl = new URL(imageUrl, baseUrl.origin).href;
+      }
+    }
+
     // Try to find JSON-LD structured data first
     const jsonLdScript = $('script[type="application/ld+json"]');
     for (let i = 0; i < jsonLdScript.length; i++) {
@@ -37,7 +59,10 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
         const jsonData = JSON.parse($(jsonLdScript[i]).html() || '');
         if (jsonData['@type'] === 'Recipe' || jsonData.recipe) {
           const recipe = jsonData.recipe || jsonData;
-          return parseStructuredRecipe(recipe);
+          const recipeData = parseStructuredRecipe(recipe);
+          // Add the extracted image URL
+          recipeData.imageUrl = imageUrl || recipeData.imageUrl;
+          return recipeData;
         }
       } catch (e) {
         // Continue trying other JSON-LD blocks
@@ -63,7 +88,10 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
     });
     
     const result = JSON.parse(response2.choices[0].message.content || '{}');
-    return normalizeRecipeData(result);
+    const recipeData = normalizeRecipeData(result);
+    // Add the extracted image URL to the fallback result
+    recipeData.imageUrl = imageUrl;
+    return recipeData;
   } catch (error) {
     console.error('Error analyzing recipe from URL:', error);
     throw new Error('Failed to analyze recipe from URL');
@@ -243,12 +271,25 @@ function parseStructuredRecipe(recipe: any): RecipeData {
     return instruction.text || instruction.name || '';
   }).filter(Boolean);
   
+  // Extract image URL from structured data
+  let imageUrl = null;
+  if (recipe.image) {
+    if (typeof recipe.image === 'string') {
+      imageUrl = recipe.image;
+    } else if (Array.isArray(recipe.image)) {
+      imageUrl = recipe.image[0];
+    } else if (recipe.image.url) {
+      imageUrl = recipe.image.url;
+    }
+  }
+  
   return {
     title: recipe.name || 'Untitled Recipe',
     description: recipe.description,
     servings: parseInt(recipe.recipeYield) || 4,
     prepMinutes: parseDuration(recipe.prepTime),
     cookMinutes: parseDuration(recipe.cookTime),
+    imageUrl,
     ingredients,
     steps
   };

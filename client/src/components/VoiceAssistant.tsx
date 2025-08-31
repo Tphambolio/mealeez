@@ -94,15 +94,30 @@ export function VoiceAssistant({
       recognitionRef.current.lang = 'en-US';
 
       recognitionRef.current.onresult = (event) => {
-        const current = event.resultIndex;
-        const transcript = event.results[current][0].transcript;
-        setTranscript(transcript);
-        console.log('Voice result:', transcript);
+        let finalTranscript = '';
+        let interimTranscript = '';
+        
+        // Process all results to build complete transcript
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+        
+        // Show interim results for user feedback
+        if (interimTranscript) {
+          setTranscript(interimTranscript);
+          onResult?.(interimTranscript);
+          console.log('Voice result (interim):', interimTranscript);
+        }
         
         // Only process final results and ensure minimum length
-        if (event.results[current].isFinal && transcript.trim().length > 3) {
-          console.log('Processing final transcript:', transcript);
-          handleVoiceCommand(transcript);
+        if (finalTranscript.trim().length > 3) {
+          console.log('Processing final transcript:', finalTranscript.trim());
+          handleVoiceCommand(finalTranscript.trim());
         }
       };
 
@@ -145,6 +160,65 @@ export function VoiceAssistant({
       }
     };
   }, [autoStart, hasStarted, userName]);
+
+  // Define speak function first
+  const speak = useCallback((text: string) => {
+    console.log('Speaking:', text);
+    
+    if (!('speechSynthesis' in window)) {
+      console.warn('Speech synthesis not supported - will show text instead');
+      // Show the text response visually if speech isn't available
+      setTranscript(`AI: ${text}`);
+      return;
+    }
+    
+    try {
+      // Cancel any existing speech
+      speechSynthesis.cancel();
+      setIsSpeaking(true);
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.9;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      utterance.lang = 'en-US';
+      
+      utterance.onstart = () => {
+        console.log('Speech synthesis started successfully');
+      };
+      
+      utterance.onend = () => {
+        console.log('Speech synthesis ended');
+        setIsSpeaking(false);
+      };
+      
+      utterance.onerror = (event) => {
+        console.error('Speech synthesis error:', event.error);
+        setIsSpeaking(false);
+        // Fallback to showing text
+        setTranscript(`AI: ${text}`);
+      };
+      
+      // Try to speak immediately
+      speechSynthesis.speak(utterance);
+      
+      // Fallback timeout
+      setTimeout(() => {
+        if (speechSynthesis.speaking) {
+          console.log('Speech still active');
+        } else if (isSpeaking) {
+          console.log('Speech completed or failed, resetting state');
+          setIsSpeaking(false);
+        }
+      }, Math.max(text.length * 80 + 2000, 5000));
+      
+    } catch (error) {
+      console.error('Speech synthesis failed:', error);
+      setIsSpeaking(false);
+      // Fallback to showing text
+      setTranscript(`AI: ${text}`);
+    }
+  }, [isSpeaking]);
 
   const startConversation = () => {
     console.log('Starting conversation, hasStarted:', hasStarted);
@@ -265,66 +339,7 @@ export function VoiceAssistant({
     } finally {
       setIsProcessing(false);
     }
-  }, [isProcessing, conversationStep, context, onResult, onMealPlanCreated, onRecipeCreated, recipeContext, currentStep, speak, toast, startListening]);
-
-  const speak = useCallback((text: string) => {
-    console.log('Speaking:', text);
-    
-    // Check if browser supports speech synthesis
-    if (!('speechSynthesis' in window)) {
-      console.error('Speech synthesis not available in this browser');
-      setIsSpeaking(false);
-      return;
-    }
-    
-    try {
-      // Cancel any existing speech
-      speechSynthesis.cancel();
-      setIsSpeaking(true);
-      
-      // Create utterance immediately
-      const utterance = new SpeechSynthesisUtterance(text);
-      
-      // Configure voice settings for better mobile compatibility
-      utterance.rate = 0.8;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      utterance.lang = 'en-US';
-      
-      // Event handlers
-      utterance.onstart = () => {
-        console.log('Speech synthesis started successfully');
-      };
-      
-      utterance.onend = () => {
-        console.log('Speech synthesis ended');
-        setIsSpeaking(false);
-      };
-      
-      utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event.error);
-        setIsSpeaking(false);
-      };
-      
-      // Start speaking immediately without waiting for voices
-      console.log('Starting speech synthesis...');
-      speechSynthesis.speak(utterance);
-      
-      // Add fallback timeout for mobile browsers
-      setTimeout(() => {
-        if (utterance && speechSynthesis.speaking) {
-          console.log('Speech still running, this is normal');
-        } else if (isSpeaking) {
-          console.log('Speech may have failed silently, stopping indicator');
-          setIsSpeaking(false);
-        }
-      }, text.length * 100 + 5000);
-      
-    } catch (error) {
-      console.error('Speech synthesis failed:', error);
-      setIsSpeaking(false);
-    }
-  }, [isSpeaking]);
+  }, [isProcessing, conversationStep, context, onResult, onMealPlanCreated, onRecipeCreated, recipeContext, currentStep, toast, startListening, speak]);
 
   const stopSpeaking = () => {
     if ('speechSynthesis' in window) {

@@ -26,6 +26,9 @@ import {
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
 import Tesseract from "tesseract.js";
+import multer from "multer";
+
+const upload = multer();
 
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
 const openai = new OpenAI({ 
@@ -35,6 +38,41 @@ const openai = new OpenAI({
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
+
+  // Health check endpoint
+  app.get("/api/health", (_, res) => res.json({ok: true, ts: Date.now()}));
+
+  // STT fallback route for Android compatibility
+  app.post("/api/stt", upload.single("audio"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No audio file provided" });
+      }
+
+      const formData = new FormData();
+      formData.append("file", new Blob([req.file.buffer]), "audio.webm");
+      formData.append("model", "whisper-1");
+
+      const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { 
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}` 
+        },
+        body: formData as any
+      });
+      
+      const result = await response.json();
+      if (!response.ok) {
+        console.error("OpenAI STT error:", result);
+        return res.status(500).json(result);
+      }
+      
+      res.json({ text: result.text || "" });
+    } catch (error: any) {
+      console.error("STT fallback error:", error);
+      res.status(500).json({ error: String(error) });
+    }
+  });
 
   // User auth routes
   app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
@@ -200,7 +238,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         success: false,
         message: "Failed to import recipe from URL", 
-        error: error.message 
+        error: error instanceof Error ? error.message : String(error) 
       });
     }
   });
@@ -260,7 +298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ 
         success: false,
         message: "Failed to import recipe from photo", 
-        error: error.message 
+        error: error instanceof Error ? error.message : String(error) 
       });
     }
   });
@@ -401,64 +439,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userName = user?.firstName || 'there';
 
       // Set up streaming response headers
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
       const systemPrompt = `
-You are MealBuilder, a proactive meal-planning assistant for ${userName}.
-
-Objectives:
-- Have a short, natural dialogue to confirm constraints (allergies, servings, cuisines, budget).
-- Then propose a weekly plan and emit a single JSON action block to let the app update state.
-
-Return format (STRICT single JSON object, nothing else):
-{
-  "reply": "<what you say to the user in natural language>",
-  "actions": [
-    {"type":"ADD_MEALS","data":[
-      {"day":"Mon","slot":"dinner","recipe":"Turkey Chili",
-        "ingredients":[{"name":"ground turkey","qty":900,"unit":"g"},{"name":"black beans","qty":2,"unit":"cans"}]
-      }
-    ]},
-    {"type":"UPDATE_GROCERIES","data":[
-      {"name":"ground turkey","qty":900,"unit":"g","category":"Meat"},
-      {"name":"black beans","qty":2,"unit":"cans","category":"Canned"}
-    ]},
-    {"type":"BUILD_CALENDAR","data":[
-      {"date":"2025-08-31","slot":"dinner","recipe":"Turkey Chili"}
-    ]}
-  ]
-}
-
-Rules:
-- Use metric units where possible; keep units consistent across meals so quantities can be summed.
-- If the user is still deciding, set actions to [] and use reply to ask the next question.
-- Never include code fences or commentary around the JSON. Return only one top-level JSON object.
-- Keep responses conversational and helpful.
+You are MealBuilder, a proactive meal-planning assistant for ${userName}. Talk naturally, then end EACH turn with ONE JSON object ONLY:
+{"reply":"<what you say to the user in natural language>", "actions":[
+  {"type":"ADD_MEALS","data":[{"day":"Mon","slot":"dinner","recipe":"Turkey Chili","ingredients":[{"name":"ground turkey", "qty":900, "unit":"g"},{"name":"black beans", "qty":2, "unit":"cans"}]}]},
+  {"type":"UPDATE_GROCERIES","data":[{"name":"ground turkey", "qty":900, "unit":"g", "category":"Meat"},{"name":"black beans", "qty":2, "unit":"cans", "category":"Canned"}]},
+  {"type":"BUILD_CALENDAR","data":[{"date":"2025-08-31","slot":"dinner","recipe":"Turkey Chili"}]}
+]}
+No code fences. Metric units. If still clarifying, return actions: [].
 `.trim();
 
-      const response = await openai.chat.completions.create({
+      const body = {
         model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         stream: true,
         temperature: 0.2,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: JSON.stringify({
-            mode: "planning",
             utterance: transcript,
-            state: clientState,
-            userName: userName
-          })},
-        ],
+            state: clientState || {}
+          })}
+        ]
+      };
+
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { 
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`, 
+          "Content-Type": "application/json" 
+        },
+        body: JSON.stringify(body)
       });
 
-      // Stream the response
-      for await (const chunk of response) {
-        const content = chunk.choices[0]?.delta?.content;
-        if (content) {
-          res.write(content);
+      if (!response.ok || !response.body) {
+        return res.status(500).end(`model_error:${response.status}`);
+      }
+
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          res.write(chunk);
         }
+      } finally {
+        reader.releaseLock();
       }
       
       res.end();

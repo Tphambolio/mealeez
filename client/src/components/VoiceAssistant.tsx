@@ -44,7 +44,12 @@ export function VoiceAssistant({
   const [hasStarted, setHasStarted] = useState(false);
   const recognitionRef = useRef<any>(null);
   const keepListeningRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const { toast } = useToast();
+
+  // Check if browser supports SpeechRecognition (problematic on Android)
+  const hasSpeechRecognition = !!(window as any).webkitSpeechRecognition || !!(window as any).SpeechRecognition;
 
   useEffect(() => {
     const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
@@ -125,22 +130,116 @@ export function VoiceAssistant({
     }, 6000);
   };
 
-  const startListening = () => {
-    if (!recognitionRef.current || isListening) return;
-    keepListeningRef.current = true;
-    try {
-      recognitionRef.current.start();
-      setIsListening(true);
-    } catch (error) {
-      console.error('Error starting speech recognition:', error);
+  const startListening = async () => {
+    if (isListening) return;
+    
+    setTranscript("");
+    
+    if (hasSpeechRecognition && recognitionRef.current) {
+      // Use native speech recognition if available
+      keepListeningRef.current = true;
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+        return;
+      } catch (error) {
+        console.error('SpeechRecognition failed, falling back to MediaRecorder:', error);
+      }
     }
+
+    // Fallback: Use MediaRecorder + Whisper STT for Android compatibility
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      const mediaRecorder = new MediaRecorder(stream, { 
+        mimeType: "audio/webm" 
+      });
+      mediaRecorderRef.current = mediaRecorder;
+      
+      const chunks: BlobPart[] = [];
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      
+      mediaRecorder.onstop = async () => {
+        console.log('MediaRecorder stopped, processing audio...');
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        
+        try {
+          const formData = new FormData();
+          formData.append("audio", blob, "speech.webm");
+          
+          const response = await fetch("/api/stt", {
+            method: "POST",
+            body: formData,
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok && result.text?.trim()) {
+            console.log('STT result:', result.text);
+            await handleVoiceCommand(result.text.trim());
+          } else {
+            console.error('STT error:', result);
+          }
+        } catch (error) {
+          console.error('STT request failed:', error);
+          toast({
+            title: "Voice Recognition Error",
+            description: "Failed to process voice input. Please try again.",
+            variant: "destructive",
+          });
+        } finally {
+          cleanup();
+        }
+      };
+      
+      mediaRecorder.start();
+      setIsListening(true);
+      
+      // Auto-stop after 5 seconds (can be made configurable)
+      setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
+        }
+      }, 5000);
+      
+    } catch (error) {
+      console.error('Failed to start audio recording:', error);
+      toast({
+        title: "Microphone Error",
+        description: "Could not access microphone. Please check permissions.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const cleanup = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current = null;
+    }
+    setIsListening(false);
   };
 
   const stopListening = () => {
     keepListeningRef.current = false;
-    if (recognitionRef.current && isListening) {
+    
+    if (recognitionRef.current && hasSpeechRecognition) {
       recognitionRef.current.stop();
-      setIsListening(false);
+    }
+    
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    } else {
+      cleanup();
     }
   };
 
@@ -157,22 +256,34 @@ export function VoiceAssistant({
   }
 
   async function sendStreaming(route: string, payload: any) {
-    const res = await fetch(route, {
+    const response = await fetch(route, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.body) throw new Error("No response body");
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let full = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      full += decoder.decode(value, { stream: true });
-      // (optional) show typing effect from partial text here
+    
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP ${response.status}: Failed to get streaming response`);
     }
-    return extractLastJSONObject(full);
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        fullText += chunk;
+        // Optional: show typing effect here by updating UI with fullText
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    
+    return extractLastJSONObject(fullText);
   }
 
   async function applyActions(actions: any[]) {
@@ -347,77 +458,44 @@ export function VoiceAssistant({
     return format(date, 'yyyy-MM-dd');
   };
 
-  const handleVoiceCommand = async (text: string) => {
+  const handleVoiceCommand = async (command: string) => {
     try {
-      console.log('Processing voice command:', text);
-      onResult?.(text);
+      console.log('Processing voice command:', command);
+      onResult?.(command);
 
-      const route = context === "planning" ? "/api/voice/plan-meal" : "/api/voice/cooking-assistance";
+      const wasListening = isListening;
+      if (wasListening) stopListening();
 
-      const json = await sendStreaming(route, {
-        transcript: context === "planning" ? text : undefined,
-        question: context === "cooking" ? text : undefined,
-        recipeContext,
-        currentStep,
-        clientState: getClientState(),
+      const json = await sendStreaming("/api/voice/plan-meal", { 
+        transcript: command, 
+        clientState: getClientState?.() || {} 
       });
 
       if (json?.reply) {
         console.log('AI reply received:', json.reply);
-        speak(json.reply); // speak() now handles mic pause/resume automatically
+        window.speechSynthesis.cancel(); 
+        const utterance = new SpeechSynthesisUtterance(json.reply); 
+        utterance.onend = () => { 
+          setIsSpeaking(false); 
+          if (wasListening && hasSpeechRecognition) {
+            setTimeout(() => startListening(), 1000);
+          }
+        }; 
+        setIsSpeaking(true); 
+        window.speechSynthesis.speak(utterance);
       }
+      
       if (Array.isArray(json?.actions)) {
-        applyActions(json.actions);
+        await applyActions(json.actions);
       }
-    } catch (e: any) {
-      console.error("Voice command failed", e);
-      toast({ title: "Voice Command Error", description: String(e), variant: "destructive" });
+    } catch (error: any) {
+      console.error("Voice command failed", error);
+      toast({ 
+        title: "Voice Command Error", 
+        description: String(error), 
+        variant: "destructive" 
+      });
     }
-  };
-
-  const speak = (text: string) => {
-    if (!("speechSynthesis" in window)) {
-      console.warn('Speech synthesis not supported - showing text instead');
-      setTranscript(`AI: ${text}`);
-      return;
-    }
-    
-    // CRITICAL: Stop listening while speaking to prevent feedback loops
-    const wasListening = isListening;
-    if (wasListening) {
-      stopListening();
-    }
-    
-    setIsSpeaking(true);
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 0.9;
-    u.pitch = 1.0;
-    u.volume = 1.0;
-    u.lang = 'en-US';
-    
-    u.onstart = () => {
-      console.log('Speech started - mic paused');
-    };
-    u.onend = () => {
-      console.log('Speech ended - resuming mic');
-      setIsSpeaking(false);
-      // Resume listening after a short delay if it was listening before
-      if (wasListening) {
-        setTimeout(() => startListening(), 1000);
-      }
-    };
-    u.onerror = (event) => {
-      console.error('Speech error:', event.error);
-      setIsSpeaking(false);
-      setTranscript(`AI: ${text}`);
-      // Resume listening on error if it was listening before
-      if (wasListening) {
-        setTimeout(() => startListening(), 1000);
-      }
-    };
-    
-    window.speechSynthesis.speak(u);
   };
 
   const stopSpeaking = () => {

@@ -1,0 +1,170 @@
+Short answer: I can hit your Replit URL, but my browser here can’t execute its client JS, so I can’t see the live behavior beyond the shell page. That means I can’t verify your mic loop from this side. 
+
+The bigger issue (and likely why it “fails” for you on the Pixel): SpeechRecognition/webkitSpeechRecognition is not reliably supported on Android Chrome/WebView. It’s explicitly marked “limited availability,” and many devs report it starts/stops or never fires events on mobile. You need a fallback STT path. 
+
+Below is a single copy-paste instruction block you can give Replit to fix this in place:
+
+
+---
+
+Replit: make voice work on Android + add streaming + action schema
+
+1) Add a simple health check (confirms server reachability)
+
+Create server.ts (or edit your server) and add:
+
+app.get("/api/health", (_, res) => res.json({ok:true, ts:Date.now()}));
+
+Test: open https://<your-repl>.replit.dev/api/health → should return JSON.
+
+2) Implement STT fallback route (/api/stt) using Whisper
+
+Add this to your server (Node/Express):
+
+import express from "express";
+import fetch from "node-fetch";
+import multer from "multer";
+const upload = multer();
+
+app.post("/api/stt", upload.single("audio"), async (req, res) => {
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([req.file.buffer]), "audio.webm");
+    form.append("model", "gpt-4o-mini-transcribe"); // or "whisper-1" if that’s what your account supports
+
+    const r = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form as any
+    });
+    const j = await r.json();
+    if (!r.ok) return res.status(500).json(j);
+    res.json({ text: j.text || "" });
+  } catch (e:any) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+Add multer to package.json deps.
+
+3) On the client, detect Android lack of SpeechRecognition and fall back to MediaRecorder→/api/stt
+
+Replace your startListening logic with:
+
+const hasSR = !!(window as any).webkitSpeechRecognition || !!(window as any).SpeechRecognition;
+
+async function startListening(){
+  setTranscript("");
+  if (hasSR) {
+    keepListeningRef.current = true;
+    recognitionRef.current!.start();
+    setIsListening(true);
+    return;
+  }
+  // Fallback: record a short utterance and send to STT
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  const chunks: BlobPart[] = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = async () => {
+    const blob = new Blob(chunks, { type: "audio/webm" });
+    const form = new FormData();
+    form.append("audio", blob, "speech.webm");
+    const r = await fetch("/api/stt", { method: "POST", body: form });
+    const { text } = await r.json();
+    if (text?.trim()) await handleVoiceCommand(text.trim());
+  };
+  rec.start();
+  setIsListening(true);
+  // Stop after a pause window (e.g., 4s); you can wire a press-and-hold UI instead.
+  setTimeout(() => { rec.stop(); stream.getTracks().forEach(t=>t.stop()); setIsListening(false); }, 4000);
+}
+
+> Why: Android Chrome frequently lacks/cripples SpeechRecognition. MediaRecorder works broadly; the server handles transcription. 
+
+
+
+4) Make your /api/voice/plan-meal stream and end with a single JSON action block
+
+On the server:
+
+const SYS = `
+You are MealBuilder. Talk naturally, then end EACH turn with ONE JSON object ONLY:
+{"reply":"...", "actions":[
+  {"type":"ADD_MEALS","data":[{"day":"Mon","slot":"dinner","recipe":"...","ingredients":[{"name":"...", "qty":..., "unit":"..."}]}]},
+  {"type":"UPDATE_GROCERIES","data":[{"name":"...", "qty":..., "unit":"...", "category":"..."}]},
+  {"type":"BUILD_CALENDAR","data":[{"date":"YYYY-MM-DD","slot":"breakfast|lunch|dinner","recipe":"..."}]}
+]}
+No code fences. Metric units. If still clarifying, return actions: [].
+`.trim();
+
+app.post("/api/voice/plan-meal", async (req, res) => {
+  const body = {
+    model: "gpt-4o-mini",
+    stream: true,
+    temperature: 0.2,
+    messages: [
+      { role: "system", content: SYS },
+      { role: "user", content: JSON.stringify({
+          utterance: req.body.transcript,
+          state: req.body.clientState || {}
+      })}
+    ]
+  };
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type":"application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok || !r.body) return res.status(500).end(`model_error:${r.status}`);
+  res.setHeader("Content-Type","text/plain; charset=utf-8");
+  res.setHeader("Cache-Control","no-cache");
+  res.setHeader("Connection","keep-alive");
+  for await (const chunk of r.body as any) res.write(chunk);
+  res.end();
+});
+
+5) On the client, pause mic while TTS speaks, auto-resume, and parse the streamed JSON tail
+
+Add:
+
+function extractLastJSONObject(text:string){
+  const last = text.lastIndexOf("{");
+  for (let i = last; i >= 0; i--) {
+    try { return JSON.parse(text.slice(i).trim()); } catch {}
+  }
+  return null;
+}
+
+async function sendStreaming(route:string, payload:any){
+  const res = await fetch(route, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
+  if (!res.body) throw new Error("no stream");
+  const reader = res.body.getReader(); const dec = new TextDecoder(); let full="";
+  for(;;){ const {value,done}=await reader.read(); if(done) break; full += dec.decode(value,{stream:true}); }
+  return extractLastJSONObject(full);
+}
+
+const handleVoiceCommand = async (command:string) => {
+  const wasListening = isListening;
+  if (wasListening) stopListening();
+  const json = await sendStreaming("/api/voice/plan-meal", { transcript: command, clientState: getClientState?.() || {} });
+  if (json?.reply) { window.speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(json.reply); u.onend=()=>{ setIsSpeaking(false); if (wasListening) startListening(); }; setIsSpeaking(true); speechSynthesis.speak(u); }
+  if (Array.isArray(json?.actions)) applyActions(json.actions);
+};
+
+6) Quick verifications
+
+Health: open /api/health in the same origin.
+
+STT fallback: on your Pixel, tap mic → see network POST /api/stt returning {text: "..."}
+
+Streaming: Network → /api/voice/plan-meal shows (pending) with incremental chunks; when it finishes, your code parses actions and updates state.
+
+Support reality: If SpeechRecognition is missing or flaky on Android, this fallback is expected. MDN lists it as limited/non-baseline; don’t rely on it for mobile. 
+
+
+
+---
+
+If you want, I can tailor the applyActions to your actual Meals/Groceries/Calendar stores—paste those reducers and I’ll wire them.
+

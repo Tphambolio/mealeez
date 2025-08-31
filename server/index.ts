@@ -1,65 +1,36 @@
-import { Express } from "express";
-import { generateMealSuggestions, provideCookingAssistance } from "./openai";
+import express from "express";
+import { createServer } from "http";
+import { setupVite, serveStatic } from "./vite";
+import apiRoutes from "./routes";
 
-export function registerRoutes(app: Express) {
-  // Health check
-  app.get("/api/health", (req, res) => {
-    res.json({
-      ok: true,
-      node: process.version,
-      hasKey: Boolean(process.env.OPENAI_API_KEY),
-      env: process.env.NODE_ENV || "unknown",
-      ts: Date.now(),
-    });
+const app = express();
+const server = createServer(app);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// Root health check endpoint for deployment
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    message: "MealBuilder API is running",
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV || "development"
   });
+});
 
-  // Meal planning endpoint
-  app.post("/api/voice/plan-meal", async (req, res) => {
-    try {
-      const { transcript, preferences, clientState } = req.body;
+// Register API routes
+app.use(apiRoutes);
 
-      const result = await generateMealSuggestions(
-        transcript,
-        preferences || {},
-      );
+const PORT = parseInt(process.env.PORT || "5000", 10);
 
-      // Normalize to { reply, actions }
-      const reply = result.response || "Here’s your meal plan!";
-      const actions: any[] = [];
-
-      if (result.mealPlans) {
-        actions.push({ type: "BUILD_CALENDAR", data: result.mealPlans });
-      }
-      if (result.recipes) {
-        actions.push({ type: "ADD_MEALS", data: result.recipes });
-        const groceries = result.recipes.flatMap(
-          (r: any) => r.ingredients || [],
-        );
-        actions.push({ type: "UPDATE_GROCERIES", data: groceries });
-      }
-
-      res.json({ reply, actions });
-    } catch (e: any) {
-      console.error("plan-meal error:", e);
-      res.status(500).json({ error: "Failed to generate meal plan" });
-    }
-  });
-
-  // Cooking assistance endpoint
-  app.post("/api/voice/cooking-assistance", async (req, res) => {
-    try {
-      const { question, recipeContext, currentStep } = req.body;
-      const result = await provideCookingAssistance(
-        question,
-        recipeContext,
-        currentStep,
-      );
-
-      const reply = result.response || "Here’s some cooking advice.";
-      res.json({ reply, actions: [] });
-    } catch (e: any) {
-      console.error("cooking-assistance error:", e);
-      res.status(500).json({ error: "Failed to provide cooking assistance" });
-    }
-  });
+// Setup Vite in development or serve static files in production
+if (process.env.NODE_ENV === "development") {
+  setupVite(app, server);
+} else {
+  serveStatic(app);
 }
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
+});

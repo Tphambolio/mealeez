@@ -3,6 +3,17 @@ import { generateMealSuggestions, provideCookingAssistance } from "./openai";
 
 const router = express.Router();
 
+// API Health check
+router.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    node: process.version,
+    hasKey: Boolean(process.env.OPENAI_API_KEY),
+    env: process.env.NODE_ENV || "unknown",
+    ts: Date.now(),
+  });
+});
+
 // Voice meal planning endpoint
 router.post("/api/voice/plan-meal", async (req, res) => {
   try {

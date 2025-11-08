@@ -106,7 +106,8 @@ export const shoppingListItems = pgTable("shopping_list_items", {
 
 // User preferences table
 export const userPreferences = pgTable("user_preferences", {
-  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().unique().references(() => users.id, { onDelete: 'cascade' }),
   defaultServings: integer("default_servings").default(4),
   voiceEnabled: boolean("voice_enabled").default(true),
   storeMap: jsonb("store_map"),
@@ -194,7 +195,7 @@ export const insertStepSchema = createInsertSchema(steps).omit({ id: true });
 export const insertMealPlanSchema = createInsertSchema(mealPlans).omit({ id: true, createdAt: true });
 export const insertShoppingListSchema = createInsertSchema(shoppingLists).omit({ id: true, createdAt: true });
 export const insertShoppingListItemSchema = createInsertSchema(shoppingListItems).omit({ id: true });
-export const insertUserPreferencesSchema = createInsertSchema(userPreferences).omit({ createdAt: true, updatedAt: true });
+export const insertUserPreferencesSchema = createInsertSchema(userPreferences).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCollaborationGroupSchema = createInsertSchema(collaborationGroups).omit({ id: true, createdAt: true });
 export const insertGroupMemberSchema = createInsertSchema(groupMembers).omit({ id: true, joinedAt: true });
 

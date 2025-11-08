@@ -9,6 +9,7 @@ import { format, startOfWeek, addDays, addWeeks, subWeeks, isToday } from "date-
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { RecipeImportModal } from "@/components/RecipeImportModal";
+import { RecipeSelectorModal } from "@/components/RecipeSelectorModal";
 import type { MealPlan, Recipe } from "@shared/schema";
 
 const MEAL_SLOTS = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
@@ -21,6 +22,8 @@ interface WeeklyPlannerProps {
 export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
   const [currentWeek, setCurrentWeek] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showRecipeSelector, setShowRecipeSelector] = useState(false);
+  const [selectedMealSlot, setSelectedMealSlot] = useState<{ date: string; mealSlot: string } | null>(null);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -107,6 +110,21 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
     } else {
       setCurrentWeek(startOfWeek(new Date(), { weekStartsOn: 1 }));
     }
+  };
+
+  const handleSelectRecipe = (recipeId: string) => {
+    if (selectedMealSlot) {
+      addMealMutation.mutate({
+        ...selectedMealSlot,
+        recipeId,
+      });
+      setSelectedMealSlot(null);
+    }
+  };
+
+  const handleOpenRecipeSelector = (date: string, mealSlot: string) => {
+    setSelectedMealSlot({ date, mealSlot });
+    setShowRecipeSelector(true);
   };
 
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(currentWeek, i));
@@ -230,10 +248,7 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
                           variant="ghost"
                           size="sm"
                           className="h-6 w-6 p-0"
-                          onClick={() => addMealMutation.mutate({
-                            date: format(day, 'yyyy-MM-dd'),
-                            mealSlot
-                          })}
+                          onClick={() => handleOpenRecipeSelector(format(day, 'yyyy-MM-dd'), mealSlot)}
                           data-testid={`button-add-meal-${dayIndex}-${mealSlot}`}
                         >
                           <Plus className="w-3 h-3" />
@@ -364,9 +379,19 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
         </div>
       </div>
 
-      <RecipeImportModal 
-        isOpen={showImportModal} 
-        onClose={() => setShowImportModal(false)} 
+      <RecipeImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+      />
+
+      <RecipeSelectorModal
+        recipes={recipes}
+        isOpen={showRecipeSelector}
+        onClose={() => {
+          setShowRecipeSelector(false);
+          setSelectedMealSlot(null);
+        }}
+        onSelectRecipe={handleSelectRecipe}
       />
     </>
   );

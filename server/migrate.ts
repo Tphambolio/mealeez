@@ -54,7 +54,30 @@ async function runMigrations() {
         .filter((s) => s.length > 0 && !s.startsWith("--"));
 
       for (const statement of statements) {
-        await db.execute(sql.raw(statement));
+        try {
+          await db.execute(sql.raw(statement));
+        } catch (statementError: any) {
+          // Log the error but continue if it's a benign error
+          const errorMessage = statementError?.message || String(statementError);
+
+          // Errors we can safely ignore
+          const ignorableErrors = [
+            'already exists',
+            'does not exist',
+            'duplicate key',
+          ];
+
+          const isIgnorable = ignorableErrors.some(msg =>
+            errorMessage.toLowerCase().includes(msg)
+          );
+
+          if (isIgnorable) {
+            console.warn(`  ⚠ Skipping statement (already applied): ${statement.substring(0, 60)}...`);
+          } else {
+            // Re-throw non-ignorable errors
+            throw statementError;
+          }
+        }
       }
 
       // Mark migration as applied

@@ -78,7 +78,7 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
       messages: [
         {
           role: "system",
-          content: "You are a recipe extraction expert...",
+          content: "You are a recipe extraction expert. Extract recipe information and return it as JSON with fields: title, description, servings, prepMinutes, cookMinutes, ingredients (array of objects with raw, quantity, unit, item), and steps (array of strings).",
         },
         {
           role: "user",
@@ -109,13 +109,13 @@ export async function analyzeRecipeFromImage(
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are a recipe extraction expert..." },
+        { role: "system", content: "You are a recipe extraction expert. Extract recipe information and return it as JSON with fields: title, description, servings, prepMinutes, cookMinutes, ingredients (array of objects with raw, quantity, unit, item), and steps (array of strings)." },
         {
           role: "user",
           content: [
             {
               type: "text",
-              text: "Extract recipe information from this image...",
+              text: "Extract recipe information from this image and return as JSON.",
             },
             { type: "image_url", image_url: { url: imageUrl } },
           ],
@@ -148,8 +148,8 @@ export async function generateMealSuggestions(
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: `You are a meal planning assistant...` },
-        { role: "user", content: `User said: "${transcript}"...` },
+        { role: "system", content: `You are a meal planning assistant. Generate meal suggestions and return them as JSON with a mealPlans array.` },
+        { role: "user", content: `User said: "${transcript}". Generate meal suggestions as JSON.` },
       ],
       response_format: { type: "json_object" },
     });
@@ -182,8 +182,8 @@ export async function provideCookingAssistance(
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are a cooking assistant..." },
-        { role: "user", content: `Question: "${question}"...` },
+        { role: "system", content: "You are a cooking assistant. Provide helpful cooking advice and return responses as JSON." },
+        { role: "user", content: `Question: "${question}". Provide answer as JSON.` },
       ],
       response_format: { type: "json_object" },
     });

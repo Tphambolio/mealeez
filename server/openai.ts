@@ -64,7 +64,9 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
         const jsonData = JSON.parse($(jsonLdScript[i]).html() || "");
         if (jsonData["@type"] === "Recipe" || jsonData.recipe) {
           const recipe = jsonData.recipe || jsonData;
+          console.log("Found structured recipe data:", JSON.stringify(recipe, null, 2).substring(0, 500));
           const recipeData = parseStructuredRecipe(recipe);
+          console.log("Parsed recipe data - ingredients:", recipeData.ingredients?.length, "steps:", recipeData.steps?.length);
           recipeData.imageUrl = imageUrl || recipeData.imageUrl;
           return recipeData;
         }
@@ -89,7 +91,9 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
     });
 
     const result = JSON.parse(response2.choices[0].message.content || "{}");
+    console.log("OpenAI extracted recipe - ingredients:", result.ingredients?.length, "steps:", result.steps?.length);
     const recipeData = normalizeRecipeData(result);
+    console.log("Normalized recipe data - ingredients:", recipeData.ingredients?.length, "steps:", recipeData.steps?.length);
     recipeData.imageUrl = imageUrl || undefined;
     return recipeData;
   } catch (error) {

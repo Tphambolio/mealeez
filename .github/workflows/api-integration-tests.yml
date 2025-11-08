@@ -35,8 +35,8 @@ jobs:
 
       - name: Create test script
         run: |
-          cat > api-tests.js << 'TESTEOF'
-          const { chromium } = require('@playwright/test');
+          cat > api-tests.mjs << 'TESTEOF'
+          import { chromium } from '@playwright/test';
 
           const BASE_URL = 'https://mealeez-production.up.railway.app';
 
@@ -313,7 +313,7 @@ jobs:
           TESTEOF
 
       - name: Run API integration tests
-        run: node api-tests.js
+        run: node api-tests.mjs
 
       - name: Upload test artifacts
         if: always()

@@ -9,8 +9,8 @@ const server = createServer(app);
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Root health check endpoint for deployment
-app.get("/", (req, res) => {
+// Health check endpoint for deployment monitoring
+app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
     message: "MealBuilder API is running",

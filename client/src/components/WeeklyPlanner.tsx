@@ -73,12 +73,20 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
 
   const generateShoppingListMutation = useMutation({
     mutationFn: async () => {
+      // Recalculate weekEnd fresh to ensure it's not undefined
+      const start = format(currentWeek, 'yyyy-MM-dd');
+      const end = format(addDays(currentWeek, 6), 'yyyy-MM-dd');
+
       const payload = {
-        weekStart,
-        weekEnd,
+        weekStart: start,
+        weekEnd: end,
         title: `Shopping List - Week of ${format(currentWeek, 'MMM dd, yyyy')}`
       };
+
       console.log('[Shopping List Generate] Sending request:', payload);
+      console.log('[Shopping List Generate] weekStart:', start);
+      console.log('[Shopping List Generate] weekEnd:', end);
+
       return apiRequest('POST', '/api/shopping-lists/generate', payload);
     },
     onSuccess: () => {

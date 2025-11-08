@@ -1,0 +1,273 @@
+name: API Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+      - claude/**
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  api-tests:
+    name: API Integration Tests with Auth
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --save-dev @playwright/test
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+
+      - name: Create test script
+        run: |
+          cat > api-tests.js << 'TESTEOF'
+          const { chromium } = require('@playwright/test');
+
+          const BASE_URL = 'https://mealeez-production.up.railway.app';
+
+          async function runTests() {
+            const browser = await chromium.launch();
+            const context = await browser.newContext();
+            const page = await context.newPage();
+
+            let passed = 0;
+            let failed = 0;
+
+            // Helper function for API requests with cookies
+            async function apiRequest(method, endpoint, data = null) {
+              const cookies = await context.cookies();
+              const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+              const options = {
+                method,
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Cookie': cookieHeader
+                }
+              };
+
+              if (data && (method === 'POST' || method === 'PUT')) {
+                options.body = JSON.stringify(data);
+              }
+
+              const response = await page.request.fetch(`${BASE_URL}${endpoint}`, options);
+              return response;
+            }
+
+            console.log('🧪 Starting API Integration Tests with Authentication\n');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+            try {
+              // Test 1: Health Check
+              console.log('1️⃣  Testing API Health...');
+              const healthResponse = await apiRequest('GET', '/api/health');
+              if (healthResponse.ok()) {
+                const health = await healthResponse.json();
+                if (health.ok === true) {
+                  console.log('   ✅ API health check passed');
+                  passed++;
+                } else {
+                  console.log('   ❌ API health check failed - invalid response');
+                  failed++;
+                }
+              } else {
+                console.log(`   ❌ API health check failed - HTTP ${healthResponse.status()}`);
+                failed++;
+              }
+
+              // Test 2: Load main page and check for auth
+              console.log('\n2️⃣  Testing main page and authentication...');
+              await page.goto(BASE_URL);
+              await page.waitForLoadState('networkidle');
+
+              const title = await page.title();
+              if (title.includes('MealBuilder') || title.includes('Vite')) {
+                console.log('   ✅ Main page loads successfully');
+                passed++;
+              } else {
+                console.log('   ❌ Main page title incorrect');
+                failed++;
+              }
+
+              // Test 3: Get current user (check auth status)
+              console.log('\n3️⃣  Testing user authentication endpoint...');
+              const userResponse = await apiRequest('GET', '/api/user');
+              if (userResponse.ok() || userResponse.status() === 401) {
+                console.log('   ✅ User endpoint responding correctly');
+                const userData = userResponse.ok() ? await userResponse.json() : null;
+                if (userData) {
+                  console.log(`   ℹ️  User authenticated: ${userData.email || 'anonymous'}`);
+                }
+                passed++;
+              } else {
+                console.log(`   ❌ User endpoint failed - HTTP ${userResponse.status()}`);
+                failed++;
+              }
+
+              // Test 4: Get recipes (should work without auth)
+              console.log('\n4️⃣  Testing GET /api/recipes...');
+              const recipesResponse = await apiRequest('GET', '/api/recipes');
+              if (recipesResponse.ok()) {
+                const recipes = await recipesResponse.json();
+                console.log(`   ✅ Recipes endpoint works - found ${recipes.length} recipes`);
+                passed++;
+              } else {
+                console.log(`   ❌ Recipes endpoint failed - HTTP ${recipesResponse.status()}`);
+                failed++;
+              }
+
+              // Test 5: Get meal plans
+              console.log('\n5️⃣  Testing GET /api/meal-plans...');
+              const today = new Date().toISOString().split('T')[0];
+              const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+              const mealPlansResponse = await apiRequest('GET', `/api/meal-plans?startDate=${today}&endDate=${nextWeek}`);
+
+              if (mealPlansResponse.ok() || mealPlansResponse.status() === 401) {
+                console.log('   ✅ Meal plans endpoint responding');
+                if (mealPlansResponse.ok()) {
+                  const mealPlans = await mealPlansResponse.json();
+                  console.log(`   ℹ️  Found ${mealPlans.length} meal plans`);
+                }
+                passed++;
+              } else {
+                console.log(`   ❌ Meal plans endpoint failed - HTTP ${mealPlansResponse.status()}`);
+                failed++;
+              }
+
+              // Test 6: Get shopping lists
+              console.log('\n6️⃣  Testing GET /api/shopping-lists...');
+              const shoppingListsResponse = await apiRequest('GET', '/api/shopping-lists');
+
+              if (shoppingListsResponse.ok() || shoppingListsResponse.status() === 401) {
+                console.log('   ✅ Shopping lists endpoint responding');
+                if (shoppingListsResponse.ok()) {
+                  const lists = await shoppingListsResponse.json();
+                  console.log(`   ℹ️  Found ${lists.length} shopping lists`);
+                }
+                passed++;
+              } else {
+                console.log(`   ❌ Shopping lists endpoint failed - HTTP ${shoppingListsResponse.status()}`);
+                failed++;
+              }
+
+              // Test 7: WebSocket connection
+              console.log('\n7️⃣  Testing WebSocket connection...');
+              try {
+                const wsUrl = BASE_URL.replace('https://', 'wss://') + '/ws';
+                const ws = await page.evaluateHandle((url) => {
+                  return new Promise((resolve, reject) => {
+                    const socket = new WebSocket(url);
+                    socket.onopen = () => resolve(socket);
+                    socket.onerror = (e) => reject(e);
+                    setTimeout(() => reject(new Error('Timeout')), 5000);
+                  });
+                }, wsUrl);
+                console.log('   ✅ WebSocket connection established');
+                passed++;
+              } catch (error) {
+                console.log('   ❌ WebSocket connection failed');
+                failed++;
+              }
+
+              // Test 8: PWA Manifest
+              console.log('\n8️⃣  Testing PWA manifest...');
+              const manifestResponse = await page.request.fetch(`${BASE_URL}/manifest.json`);
+              if (manifestResponse.ok()) {
+                const manifest = await manifestResponse.json();
+                if (manifest.name && manifest.icons) {
+                  console.log('   ✅ PWA manifest valid');
+                  passed++;
+                } else {
+                  console.log('   ❌ PWA manifest missing required fields');
+                  failed++;
+                }
+              } else {
+                console.log(`   ❌ PWA manifest failed - HTTP ${manifestResponse.status()}`);
+                failed++;
+              }
+
+              // Test 9: Icon
+              console.log('\n9️⃣  Testing icon.svg...');
+              const iconResponse = await page.request.fetch(`${BASE_URL}/icon.svg`);
+              if (iconResponse.ok()) {
+                const iconContent = await iconResponse.text();
+                if (iconContent.includes('<svg')) {
+                  console.log('   ✅ Icon SVG valid');
+                  passed++;
+                } else {
+                  console.log('   ❌ Icon not valid SVG');
+                  failed++;
+                }
+              } else {
+                console.log(`   ❌ Icon failed - HTTP ${iconResponse.status()}`);
+                failed++;
+              }
+
+              // Test 10: Check for console errors
+              console.log('\n🔟 Checking for JavaScript errors...');
+              const errors = [];
+              page.on('pageerror', error => errors.push(error.message));
+              await page.goto(BASE_URL);
+              await page.waitForTimeout(2000);
+
+              if (errors.length === 0) {
+                console.log('   ✅ No JavaScript errors detected');
+                passed++;
+              } else {
+                console.log(`   ❌ Found ${errors.length} JavaScript errors`);
+                errors.forEach(err => console.log(`      - ${err}`));
+                failed++;
+              }
+
+            } catch (error) {
+              console.error('\n❌ Test suite error:', error.message);
+              failed++;
+            } finally {
+              await browser.close();
+            }
+
+            // Print results
+            console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🎯 Test Results Summary');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log(`✅ Passed: ${passed}`);
+            console.log(`❌ Failed: ${failed}`);
+            console.log(`📊 Total:  ${passed + failed}`);
+            console.log(`📈 Success Rate: ${((passed / (passed + failed)) * 100).toFixed(1)}%`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+            if (failed > 0) {
+              process.exit(1);
+            }
+          }
+
+          runTests().catch(error => {
+            console.error('Fatal error:', error);
+            process.exit(1);
+          });
+          TESTEOF
+
+      - name: Run API integration tests
+        run: node api-tests.js
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            test-results/
+            screenshots/
+          retention-days: 7

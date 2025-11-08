@@ -4,13 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { 
-  Search, 
-  Plus, 
-  Clock, 
-  Users, 
-  Edit, 
-  Trash2, 
+import {
+  Search,
+  Plus,
+  Clock,
+  Users,
+  Edit,
+  Trash2,
   ChefHat,
   Filter,
   BookOpen,
@@ -22,12 +22,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { MobileNavigation } from "@/components/MobileNavigation";
 import { RecipeImportModal } from "@/components/RecipeImportModal";
+import { RecipeDetailModal } from "@/components/RecipeDetailModal";
 import { cn } from "@/lib/utils";
 import type { Recipe } from "@shared/schema";
 
 export default function RecipeLibrary() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const { user } = useAuth();
   const { toast } = useToast();
@@ -244,10 +246,14 @@ export default function RecipeLibrary() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredRecipes.map((recipe: Recipe) => (
-                  <Card key={recipe.id} className="overflow-hidden hover:shadow-lg transition-shadow">
+                  <Card
+                    key={recipe.id}
+                    className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+                    onClick={() => setSelectedRecipe(recipe)}
+                  >
                     {recipe.imageUrl ? (
-                      <img 
-                        src={recipe.imageUrl} 
+                      <img
+                        src={recipe.imageUrl}
                         alt={recipe.title}
                         className="w-full h-48 object-cover"
                       />
@@ -256,7 +262,7 @@ export default function RecipeLibrary() {
                         <ChefHat className="w-12 h-12 text-muted-foreground" />
                       </div>
                     )}
-                    
+
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between mb-2">
                         <h3 className="font-semibold text-lg leading-tight" data-testid={`text-recipe-title-${recipe.id}`}>
@@ -267,6 +273,10 @@ export default function RecipeLibrary() {
                             variant="ghost"
                             size="sm"
                             className="h-8 w-8 p-0"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // TODO: Implement edit functionality
+                            }}
                             data-testid={`button-edit-recipe-${recipe.id}`}
                           >
                             <Edit className="w-3 h-3" />
@@ -275,7 +285,10 @@ export default function RecipeLibrary() {
                             variant="ghost"
                             size="sm"
                             className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                            onClick={() => deleteRecipeMutation.mutate(recipe.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteRecipeMutation.mutate(recipe.id);
+                            }}
                             data-testid={`button-delete-recipe-${recipe.id}`}
                           >
                             <Trash2 className="w-3 h-3" />
@@ -320,9 +333,16 @@ export default function RecipeLibrary() {
       <MobileNavigation />
 
       {/* Recipe Import Modal */}
-      <RecipeImportModal 
-        isOpen={showImportModal} 
-        onClose={() => setShowImportModal(false)} 
+      <RecipeImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+      />
+
+      {/* Recipe Detail Modal */}
+      <RecipeDetailModal
+        recipe={selectedRecipe}
+        isOpen={selectedRecipe !== null}
+        onClose={() => setSelectedRecipe(null)}
       />
     </div>
   );

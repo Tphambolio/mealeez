@@ -56,7 +56,7 @@ export const ingredients = pgTable("ingredients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   recipeId: varchar("recipe_id").notNull().references(() => recipes.id, { onDelete: 'cascade' }),
   raw: text("raw").notNull(),
-  quantity: numeric("quantity"),
+  quantity: varchar("quantity"), // Changed from numeric to varchar to support fractions like "1/2"
   unit: varchar("unit"),
   item: text("item").notNull(),
   notes: text("notes"),
@@ -97,7 +97,7 @@ export const shoppingListItems = pgTable("shopping_list_items", {
   listId: varchar("list_id").notNull().references(() => shoppingLists.id, { onDelete: 'cascade' }),
   ingredientId: varchar("ingredient_id").references(() => ingredients.id),
   item: text("item").notNull(),
-  quantity: numeric("quantity"),
+  quantity: varchar("quantity"), // Changed from numeric to varchar to support fractions like "1/2"
   unit: varchar("unit"),
   aisle: varchar("aisle"),
   checked: boolean("checked").default(false),

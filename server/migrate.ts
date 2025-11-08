@@ -11,6 +11,23 @@ async function runMigrations() {
   try {
     console.log("Running database migrations...");
 
+    // Create migrations tracking table if it doesn't exist
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Get list of applied migrations
+    const appliedMigrations = await db.execute(sql`
+      SELECT name FROM _migrations
+    `);
+    const appliedSet = new Set(
+      appliedMigrations.rows.map((row: any) => row.name)
+    );
+
     const migrationsDir = path.join(__dirname, "..", "migrations");
     const migrationFiles = fs
       .readdirSync(migrationsDir)
@@ -18,6 +35,12 @@ async function runMigrations() {
       .sort();
 
     for (const file of migrationFiles) {
+      // Skip if already applied
+      if (appliedSet.has(file)) {
+        console.log(`⊙ Migration ${file} already applied, skipping`);
+        continue;
+      }
+
       console.log(`Applying migration: ${file}`);
       const migrationSQL = fs.readFileSync(
         path.join(migrationsDir, file),
@@ -33,6 +56,11 @@ async function runMigrations() {
       for (const statement of statements) {
         await db.execute(sql.raw(statement));
       }
+
+      // Mark migration as applied
+      await db.execute(sql`
+        INSERT INTO _migrations (name) VALUES (${file})
+      `);
 
       console.log(`✓ Migration ${file} applied successfully`);
     }

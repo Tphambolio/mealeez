@@ -73,11 +73,13 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
 
   const generateShoppingListMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest('POST', '/api/shopping-lists/generate', {
+      const payload = {
         weekStart,
         weekEnd,
         title: `Shopping List - Week of ${format(currentWeek, 'MMM dd, yyyy')}`
-      });
+      };
+      console.log('[Shopping List Generate] Sending request:', payload);
+      return apiRequest('POST', '/api/shopping-lists/generate', payload);
     },
     onSuccess: () => {
       toast({
@@ -85,10 +87,11 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
         description: "Your shopping list has been created.",
       });
     },
-    onError: () => {
+    onError: (error: any) => {
+      console.error('[Shopping List Generate] Error:', error);
       toast({
         title: "Error",
-        description: "Failed to generate shopping list.",
+        description: error?.message || "Failed to generate shopping list.",
         variant: "destructive",
       });
     },

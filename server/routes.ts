@@ -522,9 +522,14 @@ router.post("/api/shopping-lists", optionalAuth, async (req, res) => {
 router.post("/api/shopping-lists/generate", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { weekStart, weekEnd } = req.body;
+    console.log('[Shopping List Generate] Request body:', JSON.stringify(req.body));
+    console.log('[Shopping List Generate] userId:', userId);
+
+    const { weekStart, weekEnd, title } = req.body;
+    console.log('[Shopping List Generate] Extracted values:', { weekStart, weekEnd, title });
 
     if (!weekStart || !weekEnd) {
+      console.error('[Shopping List Generate] Missing parameters:', { weekStart, weekEnd });
       return res.status(400).json({ error: "weekStart and weekEnd are required" });
     }
 

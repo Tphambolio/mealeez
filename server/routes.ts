@@ -544,28 +544,39 @@ router.post("/api/shopping-lists/generate", optionalAuth, async (req, res) => {
     }
 
     // Get meal plans for the week
+    console.log('[Shopping List Generate] Fetching meal plans for date range:', { weekStart, weekEnd });
     const mealPlans = await storage.getMealPlansByUserAndDateRange(userId, weekStart, weekEnd);
+    console.log('[Shopping List Generate] Found meal plans:', mealPlans.length);
 
     // Get unique recipe IDs
     const recipeIds = Array.from(new Set(mealPlans.map(mp => mp.recipeId).filter(Boolean)));
+    console.log('[Shopping List Generate] Unique recipe IDs:', recipeIds);
 
     // Fetch all ingredients for these recipes
+    console.log('[Shopping List Generate] Fetching ingredients for recipes...');
     const allIngredients = await Promise.all(
       recipeIds.map(recipeId => storage.getIngredientsByRecipe(recipeId!))
     );
+    console.log('[Shopping List Generate] Total ingredients fetched:', allIngredients.flat().length);
 
     // Create or get existing shopping list
+    console.log('[Shopping List Generate] Checking for existing shopping list...');
     let shoppingList = await storage.getShoppingListByUserAndWeek(userId, weekStart);
 
     if (!shoppingList) {
+      console.log('[Shopping List Generate] Creating new shopping list...');
       shoppingList = await storage.createShoppingList({
         userId,
         title: `Shopping List for ${weekStart}`,
         weekStart,
       });
+      console.log('[Shopping List Generate] Created shopping list:', shoppingList.id);
+    } else {
+      console.log('[Shopping List Generate] Using existing shopping list:', shoppingList.id);
     }
 
     // Add ingredients as shopping list items
+    console.log('[Shopping List Generate] Adding shopping list items...');
     const flatIngredients = allIngredients.flat();
     await Promise.all(
       flatIngredients.map(ing =>
@@ -580,11 +591,14 @@ router.post("/api/shopping-lists/generate", optionalAuth, async (req, res) => {
         })
       )
     );
+    console.log('[Shopping List Generate] Added items:', flatIngredients.length);
 
     const items = await storage.getShoppingListItems(shoppingList.id);
+    console.log('[Shopping List Generate] Returning shopping list with items:', items.length);
     res.json({ ...shoppingList, items });
   } catch (error) {
-    console.error("Error generating shopping list:", error);
+    console.error("[Shopping List Generate] ERROR:", error);
+    console.error("[Shopping List Generate] Error stack:", error instanceof Error ? error.stack : 'No stack trace');
     res.status(500).json({ error: "Failed to generate shopping list" });
   }
 });

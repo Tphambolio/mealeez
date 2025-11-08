@@ -2,6 +2,9 @@
 
 An AI-powered meal planning and recipe management application with voice assistance, shopping list generation, and collaborative features.
 
+**🚀 Deploy anywhere**: Railway, Render, Vercel, Docker, or any Node.js host
+**📖 [Full Deployment Guide](./DEPLOYMENT.md)** | **🎯 Platform-agnostic** | **💾 Works with any PostgreSQL**
+
 ## Features
 
 - **AI-Powered Meal Planning**: Use voice or text to create weekly meal plans with AI assistance
@@ -25,17 +28,16 @@ An AI-powered meal planning and recipe management application with voice assista
 
 ### Backend
 - Express.js + TypeScript
-- PostgreSQL (Neon serverless)
+- PostgreSQL (any provider: Neon, Supabase, Railway, Render, etc.)
 - Drizzle ORM
-- OpenAI API for AI features
-- Replit Auth (OpenID Connect)
-- Passport.js for authentication
+- OpenAI API for AI features (optional)
+- Optional: Replit Auth for Replit deployments
 
 ## Prerequisites
 
 - Node.js 20+
-- PostgreSQL database (or Neon serverless)
-- OpenAI API key
+- PostgreSQL database (Neon, Supabase, Railway, local, etc.)
+- OpenAI API key (optional - for AI features)
 
 ## Setup Instructions
 
@@ -53,26 +55,36 @@ Copy the example environment file and fill in your values:
 cp .env.example .env
 ```
 
-Required environment variables:
+**Required** environment variables:
 
 ```env
-# Database
+# Database (Required)
 DATABASE_URL=postgresql://user:password@host:5432/database
+```
 
-# OpenAI API
+**Optional** environment variables:
+
+```env
+# OpenAI API (Optional - enables AI features)
 OPENAI_API_KEY=sk-your-openai-api-key-here
 
-# Session Secret (generate a random string)
+# Session Secret (Recommended for production)
 SESSION_SECRET=your-secure-random-session-secret
-
-# Replit Auth (for Replit deployments)
-REPL_ID=your-repl-id
-REPLIT_DOMAINS=your-domain.repl.co
 
 # Server
 PORT=5000
 NODE_ENV=development
+
+# Replit Auth (Only needed for Replit deployments)
+# REPL_ID=your-repl-id
+# REPLIT_DOMAINS=your-domain.repl.co
 ```
+
+**Database Providers** (choose one):
+- [Neon](https://neon.tech) - Free serverless PostgreSQL
+- [Supabase](https://supabase.com) - Free PostgreSQL + extras
+- Railway/Render built-in PostgreSQL
+- Local PostgreSQL
 
 ### 3. Run Database Migrations
 
@@ -192,6 +204,23 @@ The app requires an OpenAI API key for:
 Without an API key, these features will return errors but the app will still run.
 
 ## Deployment
+
+**📖 See [DEPLOYMENT.md](./DEPLOYMENT.md) for comprehensive deployment guides**
+
+### Quick Deploy
+
+- **Railway**: [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new)
+- **Render**: Create Web Service → Connect repo → Add PostgreSQL
+- **Docker**: Use included Docker Compose setup
+- **VPS/Dedicated**: Build and run with `npm run build && npm start`
+
+### Supported Platforms
+
+✅ Railway
+✅ Render
+✅ Vercel (with modifications)
+✅ Docker / Docker Compose
+✅ Any Node.js hosting (Heroku, DigitalOcean, AWS, etc.)
 
 ### Build for Production
 

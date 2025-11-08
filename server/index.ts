@@ -2,7 +2,6 @@ import express from "express";
 import { createServer } from "http";
 import { setupVite, serveStatic } from "./vite";
 import apiRoutes from "./routes";
-import { setupAuth } from "./replitAuth";
 
 const app = express();
 const server = createServer(app);
@@ -20,14 +19,20 @@ app.get("/", (req, res) => {
   });
 });
 
-// Setup authentication (must be before routes)
+// Setup authentication (optional - only if Replit Auth is configured)
 async function initializeServer() {
-  try {
-    await setupAuth(app);
-    console.log("✓ Authentication configured");
-  } catch (error) {
-    console.warn("⚠ Authentication setup skipped:", error instanceof Error ? error.message : "Unknown error");
-    console.warn("  App will run without auth - set REPLIT_DOMAINS and REPL_ID to enable");
+  // Only setup Replit Auth if explicitly configured
+  if (process.env.REPLIT_DOMAINS && process.env.REPL_ID) {
+    try {
+      const { setupAuth } = await import("./replitAuth.js");
+      await setupAuth(app);
+      console.log("✓ Replit Authentication configured");
+    } catch (error) {
+      console.warn("⚠ Replit Authentication setup failed:", error instanceof Error ? error.message : "Unknown error");
+      console.warn("  Continuing without authentication");
+    }
+  } else {
+    console.log("ℹ Running without authentication (set REPLIT_DOMAINS and REPL_ID to enable Replit Auth)");
   }
 
   // Register API routes
@@ -43,7 +48,7 @@ async function initializeServer() {
   }
 
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+    console.log(`✓ Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

@@ -2,10 +2,26 @@ import express from "express";
 import multer from "multer";
 import { generateMealSuggestions, provideCookingAssistance, extractRecipeFromUrl, extractRecipeFromImage } from "./openai";
 import { storage } from "./storage";
-import { isAuthenticated } from "./replitAuth";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Optional authentication middleware - allows through even without auth
+const optionalAuth: express.RequestHandler = async (req, res, next) => {
+  // If Replit Auth is configured, use it
+  if (process.env.REPLIT_DOMAINS && process.env.REPL_ID) {
+    try {
+      const { isAuthenticated } = await import("./replitAuth.js");
+      return isAuthenticated(req, res, next);
+    } catch (error) {
+      // If auth fails, continue as anonymous user
+      console.warn("Auth check failed, continuing as anonymous");
+      return next();
+    }
+  }
+  // No auth configured, allow through
+  next();
+};
 
 // Utility to get user ID from request
 function getUserId(req: express.Request): string {
@@ -49,7 +65,7 @@ router.get("/api/auth/user", async (req, res) => {
 // ========== RECIPE ENDPOINTS ==========
 
 // Get all recipes for authenticated user
-router.get("/api/recipes", isAuthenticated, async (req, res) => {
+router.get("/api/recipes", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const recipes = await storage.getRecipesByUser(userId);
@@ -73,7 +89,7 @@ router.get("/api/recipes", isAuthenticated, async (req, res) => {
 });
 
 // Get single recipe by ID
-router.get("/api/recipes/:id", isAuthenticated, async (req, res) => {
+router.get("/api/recipes/:id", optionalAuth, async (req, res) => {
   try {
     const recipe = await storage.getRecipe(req.params.id);
     if (!recipe) {
@@ -93,7 +109,7 @@ router.get("/api/recipes/:id", isAuthenticated, async (req, res) => {
 });
 
 // Create new recipe
-router.post("/api/recipes", isAuthenticated, async (req, res) => {
+router.post("/api/recipes", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { title, description, imageUrl, servings, prepMinutes, cookMinutes, sourceUrl, ingredients, steps } = req.body;
@@ -152,7 +168,7 @@ router.post("/api/recipes", isAuthenticated, async (req, res) => {
 });
 
 // Update recipe
-router.put("/api/recipes/:id", isAuthenticated, async (req, res) => {
+router.put("/api/recipes/:id", optionalAuth, async (req, res) => {
   try {
     const { title, description, imageUrl, servings, prepMinutes, cookMinutes, sourceUrl, ingredients, steps } = req.body;
 
@@ -220,7 +236,7 @@ router.put("/api/recipes/:id", isAuthenticated, async (req, res) => {
 });
 
 // Delete recipe
-router.delete("/api/recipes/:id", isAuthenticated, async (req, res) => {
+router.delete("/api/recipes/:id", optionalAuth, async (req, res) => {
   try {
     await storage.deleteRecipe(req.params.id);
     res.status(204).send();
@@ -231,7 +247,7 @@ router.delete("/api/recipes/:id", isAuthenticated, async (req, res) => {
 });
 
 // Import recipe from URL
-router.post("/api/recipes/import/url", isAuthenticated, async (req, res) => {
+router.post("/api/recipes/import/url", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { url } = req.body;
@@ -297,7 +313,7 @@ router.post("/api/recipes/import/url", isAuthenticated, async (req, res) => {
 });
 
 // Import recipe from photo
-router.post("/api/recipes/import/photo", isAuthenticated, upload.single('image'), async (req, res) => {
+router.post("/api/recipes/import/photo", optionalAuth, upload.single('image'), async (req, res) => {
   try {
     const userId = getUserId(req);
 
@@ -364,7 +380,7 @@ router.post("/api/recipes/import/photo", isAuthenticated, upload.single('image')
 // ========== MEAL PLAN ENDPOINTS ==========
 
 // Get meal plans for a date range
-router.get("/api/meal-plans", isAuthenticated, async (req, res) => {
+router.get("/api/meal-plans", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { startDate, endDate } = req.query;
@@ -387,7 +403,7 @@ router.get("/api/meal-plans", isAuthenticated, async (req, res) => {
 });
 
 // Create meal plan
-router.post("/api/meal-plans", isAuthenticated, async (req, res) => {
+router.post("/api/meal-plans", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { recipeId, date, mealSlot, servingsOverride } = req.body;
@@ -408,7 +424,7 @@ router.post("/api/meal-plans", isAuthenticated, async (req, res) => {
 });
 
 // Update meal plan
-router.put("/api/meal-plans/:id", isAuthenticated, async (req, res) => {
+router.put("/api/meal-plans/:id", optionalAuth, async (req, res) => {
   try {
     const { recipeId, date, mealSlot, servingsOverride } = req.body;
 
@@ -427,7 +443,7 @@ router.put("/api/meal-plans/:id", isAuthenticated, async (req, res) => {
 });
 
 // Delete meal plan
-router.delete("/api/meal-plans/:id", isAuthenticated, async (req, res) => {
+router.delete("/api/meal-plans/:id", optionalAuth, async (req, res) => {
   try {
     await storage.deleteMealPlan(req.params.id);
     res.status(204).send();
@@ -440,7 +456,7 @@ router.delete("/api/meal-plans/:id", isAuthenticated, async (req, res) => {
 // ========== SHOPPING LIST ENDPOINTS ==========
 
 // Get shopping list for a specific week
-router.get("/api/shopping-lists/week", isAuthenticated, async (req, res) => {
+router.get("/api/shopping-lists/week", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { weekStart } = req.query;
@@ -464,7 +480,7 @@ router.get("/api/shopping-lists/week", isAuthenticated, async (req, res) => {
 });
 
 // Create shopping list
-router.post("/api/shopping-lists", isAuthenticated, async (req, res) => {
+router.post("/api/shopping-lists", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { title, weekStart } = req.body;
@@ -483,7 +499,7 @@ router.post("/api/shopping-lists", isAuthenticated, async (req, res) => {
 });
 
 // Generate shopping list from meal plans
-router.post("/api/shopping-lists/generate", isAuthenticated, async (req, res) => {
+router.post("/api/shopping-lists/generate", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { weekStart, weekEnd } = req.body;
@@ -539,7 +555,7 @@ router.post("/api/shopping-lists/generate", isAuthenticated, async (req, res) =>
 });
 
 // Add item to shopping list
-router.post("/api/shopping-lists/items", isAuthenticated, async (req, res) => {
+router.post("/api/shopping-lists/items", optionalAuth, async (req, res) => {
   try {
     const { listId, item, quantity, unit, aisle, ingredientId } = req.body;
 
@@ -561,7 +577,7 @@ router.post("/api/shopping-lists/items", isAuthenticated, async (req, res) => {
 });
 
 // Update shopping list item
-router.put("/api/shopping-lists/:listId/items/:itemId", isAuthenticated, async (req, res) => {
+router.put("/api/shopping-lists/:listId/items/:itemId", optionalAuth, async (req, res) => {
   try {
     const { item, quantity, unit, aisle, checked } = req.body;
 
@@ -581,7 +597,7 @@ router.put("/api/shopping-lists/:listId/items/:itemId", isAuthenticated, async (
 });
 
 // Delete shopping list item
-router.delete("/api/shopping-lists/items/:itemId", isAuthenticated, async (req, res) => {
+router.delete("/api/shopping-lists/items/:itemId", optionalAuth, async (req, res) => {
   try {
     await storage.deleteShoppingListItem(req.params.itemId);
     res.status(204).send();
@@ -594,7 +610,7 @@ router.delete("/api/shopping-lists/items/:itemId", isAuthenticated, async (req, 
 // ========== USER PREFERENCES / SETTINGS ENDPOINTS ==========
 
 // Get user preferences
-router.get("/api/settings", isAuthenticated, async (req, res) => {
+router.get("/api/settings", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const preferences = await storage.getUserPreferences(userId);
@@ -612,7 +628,7 @@ router.get("/api/settings", isAuthenticated, async (req, res) => {
 });
 
 // Update user preferences
-router.put("/api/settings", isAuthenticated, async (req, res) => {
+router.put("/api/settings", optionalAuth, async (req, res) => {
   try {
     const userId = getUserId(req);
     const { defaultServings, voiceEnabled, storeMappings } = req.body;

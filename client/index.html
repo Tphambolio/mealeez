@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
     <meta name="description" content="MealBuilder - Smart meal planning with AI voice interactions, family collaboration, and Google Calendar sync" />
     <meta name="theme-color" content="#FF6B35" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="MealBuilder" />
@@ -89,128 +90,6 @@
   <body class="touch-manipulation no-tap-highlight">
     <div id="root"></div>
     
-    <!-- PWA Manifest Content -->
-    <script type="application/json" id="pwa-manifest">
-      {
-        "name": "MealBuilder - Smart Meal Planning",
-        "short_name": "MealBuilder",
-        "description": "Smart meal planning with AI voice interactions, family collaboration, and Google Calendar sync",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#FAFAFA",
-        "theme_color": "#FF6B35",
-        "orientation": "portrait-primary",
-        "scope": "/",
-        "categories": ["food", "lifestyle", "productivity"],
-        "lang": "en",
-        "dir": "ltr",
-        "icons": [
-          {
-            "src": "icon-192.png",
-            "sizes": "192x192",
-            "type": "image/png",
-            "purpose": "any maskable"
-          },
-          {
-            "src": "icon-512.png",
-            "sizes": "512x512",
-            "type": "image/png",
-            "purpose": "any maskable"
-          }
-        ],
-        "shortcuts": [
-          {
-            "name": "Weekly Planner",
-            "short_name": "Planner",
-            "description": "View and edit your weekly meal plan",
-            "url": "/",
-            "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
-          },
-          {
-            "name": "Recipe Library",
-            "short_name": "Recipes",
-            "description": "Browse and manage your recipes",
-            "url": "/recipes",
-            "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
-          },
-          {
-            "name": "Shopping List",
-            "short_name": "Shopping",
-            "description": "Check your shopping list",
-            "url": "/shopping",
-            "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
-          }
-        ],
-        "share_target": {
-          "action": "/recipes/import",
-          "method": "GET",
-          "params": {
-            "url": "url"
-          }
-        }
-      }
-    </script>
-    
-    <!-- Create manifest.json dynamically -->
-    <script>
-      const manifestContent = document.getElementById('pwa-manifest').textContent;
-      const manifestBlob = new Blob([manifestContent], { type: 'application/json' });
-      const manifestURL = URL.createObjectURL(manifestBlob);
-      
-      const manifestLink = document.createElement('link');
-      manifestLink.rel = 'manifest';
-      manifestLink.href = manifestURL;
-      document.head.appendChild(manifestLink);
-    </script>
-    
-    <!-- Service Worker Content -->
-    <script>
-      // Create service worker dynamically
-      const swContent = `
-        const CACHE_NAME = 'mealbuilder-v1';
-        const urlsToCache = [
-          '/',
-          '/static/js/bundle.js',
-          '/static/css/main.css',
-          '/manifest.json'
-        ];
-
-        self.addEventListener('install', (event) => {
-          event.waitUntil(
-            caches.open(CACHE_NAME)
-              .then((cache) => cache.addAll(urlsToCache))
-          );
-        });
-
-        self.addEventListener('fetch', (event) => {
-          event.respondWith(
-            caches.match(event.request)
-              .then((response) => {
-                if (response) {
-                  return response;
-                }
-                return fetch(event.request);
-              }
-            )
-          );
-        });
-
-        self.addEventListener('notificationclick', (event) => {
-          event.notification.close();
-          event.waitUntil(
-            clients.openWindow('/')
-          );
-        });
-      `;
-      
-      const swBlob = new Blob([swContent], { type: 'application/javascript' });
-      const swURL = URL.createObjectURL(swBlob);
-      
-      // Register the service worker
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register(swURL);
-      }
-    </script>
     
     <script type="module" src="/src/main.tsx"></script>
     <!-- This is a replit script which adds a banner on the top of the page when opened in development mode outside the replit environment -->

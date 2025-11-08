@@ -133,17 +133,42 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws`;
-    const socket = new WebSocket(wsUrl);
 
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'meal_plan_updated') {
-        queryClient.invalidateQueries({ queryKey: ['/api/meal-plans'] });
-      }
-    };
+    let socket: WebSocket | null = null;
+
+    try {
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        console.log('WebSocket connected');
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'meal_plan_updated') {
+            queryClient.invalidateQueries({ queryKey: ['/api/meal-plans'] });
+          }
+        } catch (error) {
+          console.error('WebSocket message parse error:', error);
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.warn('WebSocket error (real-time updates disabled):', error);
+      };
+
+      socket.onclose = () => {
+        console.log('WebSocket disconnected');
+      };
+    } catch (error) {
+      console.warn('Failed to establish WebSocket connection:', error);
+    }
 
     return () => {
-      socket.close();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
     };
   }, [queryClient]);
 

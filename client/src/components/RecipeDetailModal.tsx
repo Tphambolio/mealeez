@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -21,6 +21,9 @@ export function RecipeDetailModal({ recipe, isOpen, onClose }: RecipeDetailModal
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold">{recipe.title}</DialogTitle>
+          <DialogDescription>
+            {recipe.description || "View recipe details, ingredients, and cooking instructions"}
+          </DialogDescription>
         </DialogHeader>
 
         {/* Recipe Image */}

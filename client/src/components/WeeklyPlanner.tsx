@@ -75,6 +75,7 @@ export function WeeklyPlanner({ onCookingMode }: WeeklyPlannerProps) {
     mutationFn: async () => {
       return apiRequest('POST', '/api/shopping-lists/generate', {
         weekStart,
+        weekEnd,
         title: `Shopping List - Week of ${format(currentWeek, 'MMM dd, yyyy')}`
       });
     },

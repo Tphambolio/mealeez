@@ -29,6 +29,15 @@ function getUserId(req: express.Request): string {
   return user?.claims?.sub || user?.id || 'anonymous';
 }
 
+// Helper to check resource ownership
+async function checkOwnership(resourceUserId: string, requestUserId: string, res: express.Response): Promise<boolean> {
+  if (resourceUserId !== requestUserId) {
+    res.status(403).json({ error: "Access denied" });
+    return false;
+  }
+  return true;
+}
+
 // API Health check
 router.get("/api/health", (req, res) => {
   res.json({
@@ -238,6 +247,17 @@ router.put("/api/recipes/:id", optionalAuth, async (req, res) => {
 // Delete recipe
 router.delete("/api/recipes/:id", optionalAuth, async (req, res) => {
   try {
+    const userId = getUserId(req);
+    const recipe = await storage.getRecipe(req.params.id);
+
+    if (!recipe) {
+      return res.status(404).json({ error: "Recipe not found" });
+    }
+
+    if (!await checkOwnership(recipe.userId, userId, res)) {
+      return;
+    }
+
     await storage.deleteRecipe(req.params.id);
     res.status(204).send();
   } catch (error) {

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512">
+  <rect width="100" height="100" rx="20" fill="#FF6B35"/>
+  <g fill="white">
+    <!-- Fork -->
+    <rect x="25" y="30" width="3" height="40" rx="1.5"/>
+    <rect x="22" y="30" width="3" height="15" rx="1.5"/>
+    <rect x="28" y="30" width="3" height="15" rx="1.5"/>
+
+    <!-- Spoon -->
+    <rect x="68" y="30" width="3" height="40" rx="1.5"/>
+    <ellipse cx="69.5" cy="32" rx="5" ry="6"/>
+
+    <!-- Plate -->
+    <ellipse cx="50" cy="62" rx="18" ry="3" fill="white" opacity="0.3"/>
+    <path d="M 32 62 Q 32 75, 50 75 Q 68 75, 68 62" fill="none" stroke="white" stroke-width="2"/>
+  </g>
+</svg>

@@ -525,12 +525,22 @@ router.post("/api/shopping-lists/generate", optionalAuth, async (req, res) => {
     console.log('[Shopping List Generate] Request body:', JSON.stringify(req.body));
     console.log('[Shopping List Generate] userId:', userId);
 
-    const { weekStart, weekEnd, title } = req.body;
+    let { weekStart, weekEnd, title } = req.body;
     console.log('[Shopping List Generate] Extracted values:', { weekStart, weekEnd, title });
 
-    if (!weekStart || !weekEnd) {
-      console.error('[Shopping List Generate] Missing parameters:', { weekStart, weekEnd });
-      return res.status(400).json({ error: "weekStart and weekEnd are required" });
+    if (!weekStart) {
+      console.error('[Shopping List Generate] Missing weekStart parameter');
+      return res.status(400).json({ error: "weekStart is required" });
+    }
+
+    // If weekEnd is missing, calculate it (7 days from weekStart)
+    if (!weekEnd) {
+      console.log('[Shopping List Generate] weekEnd missing, calculating from weekStart');
+      const startDate = new Date(weekStart);
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 6);
+      weekEnd = endDate.toISOString().split('T')[0];
+      console.log('[Shopping List Generate] Calculated weekEnd:', weekEnd);
     }
 
     // Get meal plans for the week

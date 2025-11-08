@@ -1,0 +1,95 @@
+name: Test Railway Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - claude/**
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  test-deployment:
+    name: Test Live Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for Railway deployment
+        run: sleep 30  # Give Railway time to deploy
+
+      - name: Test API Health
+        run: |
+          echo "🧪 Testing API Health..."
+          response=$(curl -s https://mealeez-production.up.railway.app/api/health)
+          echo "Response: $response"
+          if echo "$response" | grep -q '"ok":true'; then
+            echo "✅ API health check passed"
+          else
+            echo "❌ API health check failed"
+            exit 1
+          fi
+
+      - name: Test Main Page
+        run: |
+          echo "🧪 Testing main page..."
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" https://mealeez-production.up.railway.app/)
+          echo "HTTP Status: $http_code"
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Main page loads successfully"
+          else
+            echo "❌ Main page failed with status $http_code"
+            exit 1
+          fi
+
+      - name: Test PWA Manifest
+        run: |
+          echo "🧪 Testing PWA manifest..."
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" https://mealeez-production.up.railway.app/manifest.json)
+          echo "HTTP Status: $http_code"
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Manifest loads successfully"
+          else
+            echo "❌ Manifest failed with status $http_code"
+            exit 1
+          fi
+
+      - name: Test Icon
+        run: |
+          echo "🧪 Testing icon..."
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" https://mealeez-production.up.railway.app/icon.svg)
+          echo "HTTP Status: $http_code"
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Icon loads successfully"
+          else
+            echo "❌ Icon failed with status $http_code"
+            exit 1
+          fi
+
+      - name: Test Recipes API
+        run: |
+          echo "🧪 Testing /api/recipes endpoint..."
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" https://mealeez-production.up.railway.app/api/recipes)
+          echo "HTTP Status: $http_code"
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Recipes API works"
+          else
+            echo "❌ Recipes API failed with status $http_code"
+            exit 1
+          fi
+
+      - name: Test Results Summary
+        if: always()
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎯 MealBuilder Deployment Test Complete"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ $? -eq 0 ]; then
+            echo "✅ All tests passed!"
+          else
+            echo "❌ Some tests failed - check logs above"
+          fi

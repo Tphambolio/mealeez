@@ -1,12 +1,13 @@
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
 
-// Initialize OpenAI client with required API key
-const openai = new OpenAI({
+// Initialize OpenAI client (API key optional for development)
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-});
-if (!openai.apiKey) {
-  throw new Error("Missing OPENAI_API_KEY in environment");
+}) : null;
+
+if (!openai) {
+  console.warn("⚠ OpenAI API key not configured - AI features will be disabled");
 }
 
 interface RecipeData {
@@ -29,6 +30,10 @@ interface RecipeData {
 }
 
 export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
+  if (!openai) {
+    throw new Error("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.");
+  }
+
   try {
     const response = await fetch(url);
     const html = await response.text();
@@ -96,6 +101,10 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
 export async function analyzeRecipeFromImage(
   imageUrl: string,
 ): Promise<RecipeData> {
+  if (!openai) {
+    throw new Error("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.");
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -127,6 +136,10 @@ export async function generateMealSuggestions(
   transcript: string,
   preferences?: any,
 ): Promise<any> {
+  if (!openai) {
+    throw new Error("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.");
+  }
+
   try {
     const currentDate = new Date();
     const weekStart = new Date(currentDate);
@@ -161,6 +174,10 @@ export async function provideCookingAssistance(
   recipeContext?: any,
   currentStep?: any,
 ): Promise<any> {
+  if (!openai) {
+    throw new Error("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.");
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -179,6 +196,10 @@ export async function provideCookingAssistance(
 }
 
 export async function parseRecipeFromText(text: string): Promise<RecipeData> {
+  if (!openai) {
+    throw new Error("OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.");
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mealbuilder-v1';
+const CACHE_NAME = 'mealbuilder-v2-fix-shopping-list';
 const urlsToCache = [
   '/',
   '/manifest.json'

@@ -16,6 +16,7 @@ interface RecipeData {
   prepMinutes?: number;
   cookMinutes?: number;
   imageUrl?: string;
+  sourceUrl?: string;
   ingredients?: Array<{
     raw: string;
     quantity?: string;
@@ -84,7 +85,7 @@ export async function analyzeRecipeFromUrl(url: string): Promise<RecipeData> {
 
     const result = JSON.parse(response2.choices[0].message.content || "{}");
     const recipeData = normalizeRecipeData(result);
-    recipeData.imageUrl = imageUrl;
+    recipeData.imageUrl = imageUrl || undefined;
     return recipeData;
   } catch (error) {
     console.error("Error analyzing recipe from URL:", error);
@@ -199,4 +200,74 @@ export async function parseRecipeFromText(text: string): Promise<RecipeData> {
   }
 }
 
-// ... keep your helper functions (parseStructuredRecipe, parseIngredient, etc.) unchanged
+// Helper functions
+function parseStructuredRecipe(recipe: any): RecipeData {
+  return {
+    title: recipe.name || "Untitled Recipe",
+    description: recipe.description || "",
+    servings: recipe.recipeYield ? parseInt(recipe.recipeYield) : 4,
+    prepMinutes: recipe.prepTime ? parseDuration(recipe.prepTime) : undefined,
+    cookMinutes: recipe.cookTime ? parseDuration(recipe.cookTime) : undefined,
+    imageUrl: recipe.image || undefined,
+    ingredients: (recipe.recipeIngredient || []).map((ing: string) => parseIngredient(ing)),
+    steps: (recipe.recipeInstructions || []).map((step: any) =>
+      typeof step === "string" ? step : step.text || step.name || ""
+    ),
+  };
+}
+
+function parseDuration(duration: string): number {
+  // Parse ISO 8601 duration format (PT15M, PT1H30M, etc.)
+  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
+  if (!match) return 0;
+  const hours = parseInt(match[1] || "0");
+  const minutes = parseInt(match[2] || "0");
+  return hours * 60 + minutes;
+}
+
+function parseIngredient(raw: string): any {
+  // Simple ingredient parsing - extract quantity, unit, and item
+  const quantityRegex = /^(\d+(?:\/\d+)?|\d+\.\d+)\s*([a-zA-Z]+)?\s+(.+)$/;
+  const match = raw.match(quantityRegex);
+
+  if (match) {
+    return {
+      raw,
+      quantity: match[1],
+      unit: match[2] || undefined,
+      item: match[3],
+    };
+  }
+
+  return {
+    raw,
+    item: raw,
+  };
+}
+
+function normalizeRecipeData(data: any): RecipeData {
+  return {
+    title: data.title || data.name || "Untitled Recipe",
+    description: data.description || "",
+    servings: data.servings || data.servingSize || 4,
+    prepMinutes: data.prepMinutes || data.prepTime || 0,
+    cookMinutes: data.cookMinutes || data.cookTime || 0,
+    imageUrl: data.imageUrl || data.image,
+    ingredients: (data.ingredients || []).map((ing: any) =>
+      typeof ing === "string" ? parseIngredient(ing) : ing
+    ),
+    steps: (data.steps || data.instructions || []).map((step: any) =>
+      typeof step === "string" ? step : step.text || step
+    ),
+  };
+}
+
+// Export aliases for route handlers
+export const extractRecipeFromUrl = analyzeRecipeFromUrl;
+
+export async function extractRecipeFromImage(imageBuffer: Buffer): Promise<RecipeData> {
+  // Convert buffer to base64 data URL
+  const base64Image = imageBuffer.toString('base64');
+  const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+  return analyzeRecipeFromImage(dataUrl);
+}

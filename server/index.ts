@@ -2,6 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { setupVite, serveStatic } from "./vite";
 import apiRoutes from "./routes";
+import { storage } from "./storage";
 
 const app = express();
 const server = createServer(app);
@@ -21,6 +22,19 @@ app.get("/api/health", (req, res) => {
 
 // Setup authentication (optional - only if Replit Auth is configured)
 async function initializeServer() {
+  // Ensure anonymous user exists for unauthenticated access
+  try {
+    await storage.upsertUser({
+      id: 'anonymous',
+      email: null,
+      firstName: 'Anonymous',
+      lastName: 'User',
+    });
+    console.log("✓ Anonymous user initialized");
+  } catch (error) {
+    console.warn("⚠ Failed to initialize anonymous user:", error instanceof Error ? error.message : "Unknown error");
+  }
+
   // Only setup Replit Auth if explicitly configured
   if (process.env.REPLIT_DOMAINS && process.env.REPL_ID) {
     try {
